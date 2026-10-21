@@ -1,0 +1,11 @@
+{
+  "testedAt": "2026-10-21T03:08:50.458Z",
+  "model": "gpt-5.5",
+  "source": "live_ai",
+  "fictional": true,
+  "schemaValid": true,
+  "deliverableCount": 5,
+  "clarifyingQuestionCount": 4,
+  "latencyMs": 8199,
+  "boundary": "One synthetic development smoke check, not a quality benchmark. No workspace, acceptance, order, or payment is created."
+}

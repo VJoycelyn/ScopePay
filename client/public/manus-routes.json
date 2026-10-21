@@ -1,0 +1,7 @@
+{
+  "routes": [
+    { "path": "/", "title": "ScopePay workspace" },
+    { "path": "/setup", "title": "Setup and service status" },
+    { "path": "/client/:token", "title": "Public client review" }
+  ]
+}

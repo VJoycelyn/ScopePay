@@ -1,0 +1,50 @@
+{
+  "testedAt": "2026-10-21T03:05:48.732Z",
+  "checks": [
+    {
+      "check": "Database and PayPal sandbox configuration available",
+      "passed": true
+    },
+    {
+      "check": "Owner workspace requires a private capability",
+      "passed": true
+    },
+    {
+      "check": "Fictional sample has no fake approval or payment",
+      "passed": true
+    },
+    {
+      "check": "Server stores and derives exact integer-cent prices",
+      "passed": true
+    },
+    {
+      "check": "Client review exposes exact published terms, not private drafts or brief",
+      "passed": true
+    },
+    {
+      "check": "PayPal order cannot be created before explicit acceptance",
+      "passed": true
+    },
+    {
+      "check": "Fresh share links revoke old links; owner reload does not expose raw capabilities",
+      "passed": true
+    },
+    {
+      "check": "A different document version cannot be accepted",
+      "passed": true
+    },
+    {
+      "check": "Accepted document cannot be repriced by the freelancer",
+      "passed": true
+    },
+    {
+      "check": "PayPal sandbox creates a real order; repeated creation returns the same order",
+      "passed": true
+    },
+    {
+      "check": "An unapproved, uncaptured sandbox order is never marked paid",
+      "passed": true
+    }
+  ],
+  "boundary": "Synthetic workspace only. Real sandbox OAuth and Orders v2 creation exercised. No buyer approval or payment capture attempted. Test-owned local records are removed after the run; the unapproved remote sandbox order expires normally."
+}

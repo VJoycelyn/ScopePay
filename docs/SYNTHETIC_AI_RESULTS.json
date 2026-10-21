@@ -1,0 +1,22 @@
+{
+  "testedAt": "2026-10-21T03:06:42.192Z",
+  "model": "gpt-5.5",
+  "sampleSize": 1,
+  "context": "Developer-authored synthetic cases, run once each against the actual app AI helper. Not an independent benchmark or real-user study. Initial three-case results, including their failure, are preserved separately.",
+  "matchedCount": 1,
+  "results": [
+    {
+      "name": "Excluded ecommerce integration",
+      "expected": "out_of_scope",
+      "actual": "out_of_scope",
+      "matched": true,
+      "schemaValid": true,
+      "latencyMs": 4448,
+      "evidence": [
+        "Approved scope is limited to “One responsive launch landing page” and deliverable states “One responsive page with hero, menu, and local signup form. No other pages.” Exclusions include “Additional pages” and “Ecommerce or payment integrations.”",
+        "Approved scope deliverable is “One landing page” with “hero, menu, and local signup form. No other pages.” Exclusions include “Additional pages.” A product catalog would require functionality/content beyond the single launch landing page and likely additional page/section structure not included in scope."
+      ],
+      "source": "live_ai"
+    }
+  ]
+}

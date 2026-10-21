@@ -1,0 +1,42 @@
+{
+  "testedAt": "2026-10-21T03:05:05.122Z",
+  "model": "gpt-5.5",
+  "sampleSize": 3,
+  "context": "Three developer-authored synthetic cases, run once each against the actual app AI helper. Not an independent benchmark or real-user study.",
+  "matchedCount": 2,
+  "results": [
+    {
+      "name": "Included headline revision",
+      "expected": "included",
+      "actual": "included",
+      "matched": true,
+      "schemaValid": true,
+      "latencyMs": 4325,
+      "evidence": [
+        "Approved scope includes deliverable \"One revision round\" with description \"One round of headline and color changes only, before acceptance\" and revisionLimit \"One headline/color revision round; number of revisions already used is not supplied\". Client asks to \"change the headline\" during \"our first and only revision round,\" which fits headline changes if the revision round is available and before acceptance."
+      ],
+      "source": "live_ai"
+    },
+    {
+      "name": "Excluded ecommerce integration",
+      "expected": "out_of_scope",
+      "actual": null,
+      "matched": false,
+      "schemaValid": false,
+      "latencyMs": 4998,
+      "error": "[\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_small\",\n    \"minimum\": 0,\n    \"inclusive\": false,\n    \"path\": [\n      \"suggestedDeliverables\",\n      0,\n      \"hours\"\n    ],\n    \"message\": \"Too small: expected number to be >0\"\n  }\n]"
+    },
+    {
+      "name": "Ambiguous used revision allowance",
+      "expected": "unclear",
+      "actual": "unclear",
+      "matched": true,
+      "schemaValid": true,
+      "latencyMs": 4391,
+      "evidence": [
+        "Approved scope includes “One revision round” and states: “One round of headline and color changes only, before acceptance.” It also states: “revisionLimit: One headline/color revision round; number of revisions already used is not supplied.” The client asks for “another round of edits” but does not specify whether the edits are limited to headline/color changes, whether acceptance has occurred, or whether the included round has already been used."
+      ],
+      "source": "live_ai"
+    }
+  ]
+}
