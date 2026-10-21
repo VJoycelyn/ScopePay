@@ -12,8 +12,150 @@ import type {
   PaymentResult,
   ServiceStatus,
 } from "@shared/scopepay";
-import { scopepayApi } from "../../lib/scopepay-api";
+import { ScopePayApiError, scopepayApi } from "../../lib/scopepay-api";
 import { errorMessage, formatMoney } from "./shared";
+
+const PAYPAL_LOG_PREFIX = "[ScopePay PayPal]";
+const SAFE_API_CODES = new Set([
+  "PAYMENT_PENDING",
+  "PAYMENT_UNKNOWN",
+  "PAYMENT_RETRY",
+  "PAYMENT_MISMATCH",
+  "PAYPAL_NOT_CONFIGURED",
+  "PAYPAL_UNAVAILABLE",
+  "RATE_LIMITED",
+  "ORDER_NOT_FOUND",
+  "ORDER_PENDING",
+  "ACCEPTANCE_REQUIRED",
+  "INTERNAL_ERROR",
+  "VERSION_MISMATCH",
+]);
+const SAFE_HTTP_STATUSES = new Set([
+  400, 401, 403, 404, 409, 422, 429, 500, 502, 503, 504,
+]);
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function createTraceId(): string {
+  try {
+    if (typeof globalThis.crypto?.randomUUID === "function") {
+      const traceId = globalThis.crypto.randomUUID();
+      if (UUID_V4_PATTERN.test(traceId)) return traceId;
+    }
+  } catch {
+    // Fall through to the UUID v4 getRandomValues implementation.
+  }
+  try {
+    if (typeof globalThis.crypto?.getRandomValues === "function") {
+      const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0"));
+      return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex
+        .slice(6, 8)
+        .join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+    }
+  } catch {
+    // Logging must never affect checkout when browser crypto is unavailable.
+  }
+  return "00000000-0000-4000-8000-000000000000";
+}
+
+function nowMs(): number {
+  try {
+    return typeof performance !== "undefined" &&
+      typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+  } catch {
+    return 0;
+  }
+}
+
+function elapsedMs(startedAt: number): number {
+  try {
+    return Math.max(0, Math.round(nowMs() - startedAt));
+  } catch {
+    return 0;
+  }
+}
+
+function errorDiagnostics(error: unknown): {
+  errorType:
+    | "TypeError"
+    | "AbortError"
+    | "ScopePayApiError"
+    | "Error"
+    | "UnknownError";
+  errorCode: string;
+  httpStatus: number | null;
+} {
+  try {
+    if (error instanceof ScopePayApiError) {
+      return {
+        errorType: "ScopePayApiError",
+        errorCode:
+          typeof error.code === "string" && SAFE_API_CODES.has(error.code)
+            ? error.code
+            : "UNKNOWN_ERROR",
+        httpStatus: SAFE_HTTP_STATUSES.has(error.status) ? error.status : null,
+      };
+    }
+    if (error instanceof TypeError) {
+      return {
+        errorType: "TypeError",
+        errorCode: "UNKNOWN_ERROR",
+        httpStatus: null,
+      };
+    }
+    if (
+      (typeof DOMException !== "undefined" &&
+        error instanceof DOMException &&
+        error.name === "AbortError") ||
+      (error instanceof Error && error.name === "AbortError")
+    ) {
+      return {
+        errorType: "AbortError",
+        errorCode: "UNKNOWN_ERROR",
+        httpStatus: null,
+      };
+    }
+    if (error instanceof Error) {
+      return {
+        errorType: "Error",
+        errorCode: "UNKNOWN_ERROR",
+        httpStatus: null,
+      };
+    }
+  } catch {
+    // Return the safest diagnostic if an unusual error object cannot be inspected.
+  }
+  return {
+    errorType: "UnknownError",
+    errorCode: "UNKNOWN_ERROR",
+    httpStatus: null,
+  };
+}
+
+function logPayPal(
+  level: "info" | "warn" | "error",
+  stage: string,
+  fields: Record<string, unknown>
+): void {
+  try {
+    const payload = JSON.stringify({
+      source: "browser",
+      environment: "sandbox",
+      stage,
+      ...fields,
+    });
+    if (level === "error") console.error(PAYPAL_LOG_PREFIX, payload);
+    else if (level === "warn") console.warn(PAYPAL_LOG_PREFIX, payload);
+    else console.info(PAYPAL_LOG_PREFIX, payload);
+  } catch {
+    // Console and serialization failures must never change the payment result.
+  }
+}
 
 declare global {
   interface Window {
@@ -90,14 +232,49 @@ export function PayPalCheckout({
     });
     setPaymentState("paid");
   };
-  const capture = async (id: string) => {
+  const capture = async (
+    id: string,
+    traceId = createTraceId()
+  ): Promise<{ success: boolean; error?: unknown }> => {
+    const startedAt = nowMs();
+    const captureFields = {
+      traceId,
+      scopeVersion: review.document.version,
+      amountCents: review.document.totalCents,
+      currency: review.document.currency,
+      orderIdPresent: Boolean(id),
+    };
     setPaymentState("capturing");
     setPaymentError("");
+    logPayPal("info", "capture.request", {
+      ...captureFields,
+      elapsedMs: elapsedMs(startedAt),
+    });
     try {
-      applyPaidResult(await scopepayApi.captureOrder(token, id));
+      const result = await scopepayApi.captureOrder(token, id, traceId);
+      logPayPal("info", "capture.response", {
+        ...captureFields,
+        success: result.status === "paid",
+        resultStatus: result.status === "paid" ? "paid" : "UNKNOWN_RESULT",
+        elapsedMs: elapsedMs(startedAt),
+      });
+      applyPaidResult(result);
+      logPayPal("info", "capture.ui_updated", {
+        ...captureFields,
+        success: true,
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return { success: true };
     } catch (error) {
       setPaymentState("error");
       setPaymentError(errorMessage(error));
+      logPayPal("error", "capture.failed", {
+        ...captureFields,
+        success: false,
+        elapsedMs: elapsedMs(startedAt),
+        ...errorDiagnostics(error),
+      });
+      return { success: false, error };
     }
   };
   const verify = async () => {
@@ -157,7 +334,27 @@ export function PayPalCheckout({
           }
         },
         onApprove: async (data: { orderID: string }) => {
-          await capture(data.orderID);
+          const traceId = createTraceId();
+          const startedAt = nowMs();
+          const orderIdPresent = Boolean(data.orderID);
+          const approveFields = {
+            traceId,
+            scopeVersion: review.document.version,
+            amountCents: review.document.totalCents,
+            currency: review.document.currency,
+            orderIdPresent,
+          };
+          logPayPal("info", "onApprove.enter", {
+            ...approveFields,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          const outcome = await capture(data.orderID, traceId);
+          logPayPal(outcome.success ? "info" : "error", "onApprove.complete", {
+            ...approveFields,
+            success: outcome.success,
+            elapsedMs: elapsedMs(startedAt),
+            ...(outcome.error ? errorDiagnostics(outcome.error) : {}),
+          });
         },
         onCancel: () => {
           setPaymentState("idle");

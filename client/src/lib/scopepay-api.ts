@@ -169,11 +169,12 @@ export const scopepayApi = {
       method: "POST",
       body: JSON.stringify({ version }),
     }),
-  captureOrder: (token: string, orderId: string) =>
+  captureOrder: (token: string, orderId: string, traceId?: string) =>
     request<PaymentResult>(
       `/client/${encodeURIComponent(token)}/orders/${encodeURIComponent(orderId)}/capture`,
       {
         method: "POST",
+        ...(traceId ? { headers: { "X-ScopePay-Trace-Id": traceId } } : {}),
       }
     ),
   reconcileOrder: (token: string, orderId: string) =>

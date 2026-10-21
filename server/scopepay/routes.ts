@@ -50,6 +50,7 @@ import {
   paypalPaymentStatus,
   recoveryStatus,
 } from "./paypal";
+import { createPaymentTrace, safePaymentErrorCode } from "./payment-trace";
 
 const router = Router();
 const MAX_TOTAL_CENTS = 100_000_000;
@@ -1596,17 +1597,30 @@ function paymentStatusError(status: ReturnType<typeof paypalPaymentStatus>): {
 }
 
 router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
+  const trace = createPaymentTrace(req, res);
+  trace.info("capture.route_enter", {
+    hasOrderId: Boolean(req.params.orderId),
+  });
   const client = requireClient(req, res);
-  if (!client) return;
-  if (!paypalConfigured())
+  if (!client) {
+    trace.warn("capture.client_rejected", { httpStatus: res.statusCode });
+    return;
+  }
+  if (!paypalConfigured()) {
+    trace.warn("capture.not_configured", {
+      errorCode: "PAYPAL_NOT_CONFIGURED",
+    });
     return sendError(
       res,
       503,
       "PayPal checkout is not configured",
       "PAYPAL_NOT_CONFIGURED"
     );
-  if (!rateLimit(req, "client-capture", 10))
+  }
+  if (!rateLimit(req, "client-capture", 10)) {
+    trace.warn("capture.rate_limited", { errorCode: "RATE_LIMITED" });
     return sendError(res, 429, "Too many capture requests", "RATE_LIMITED");
+  }
   let pending: {
     paypalOrderId: string;
     amountCents: number;
@@ -1616,6 +1630,7 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
     alreadyCaptured?: boolean;
   } | null = null;
   try {
+    trace.info("capture.order_lookup");
     pending = await withTokenLock(
       client.hash,
       async (connection, _row, workspace, token) => {
@@ -1630,6 +1645,14 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
           order.document_id !== token.document_id
         )
           throw new Error("ORDER_NOT_FOUND");
+        trace.info("capture.order_loaded", {
+          version: order.document_version,
+          amountCents: order.amount_cents,
+          currency: order.currency,
+          hasOrderId: Boolean(order.paypal_order_id),
+          alreadyCaptured:
+            order.status === "captured" && Boolean(order.capture_id),
+        });
         if (order.status === "captured" && order.capture_id)
           return {
             value: {
@@ -1663,7 +1686,8 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
       }
     );
     if (!pending) throw new Error("ORDER_NOT_FOUND");
-    if (pending.alreadyCaptured)
+    if (pending.alreadyCaptured) {
+      trace.info("capture.already_recorded", { captureVerified: true });
       return res.json({
         status: "paid",
         orderId: pending.paypalOrderId,
@@ -1671,11 +1695,17 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
         amountCents: pending.amountCents,
         currency: "USD" as const,
       });
+    }
 
     // Always inspect the provider before a retry. This makes repeated clicks
     // safe and avoids issuing a second capture after an uncertain timeout.
+    trace.info("capture.provider_lookup");
     const before = await getPaypalOrder(pending.paypalOrderId);
     const beforeStatus = recoveryStatus(before);
+    trace.info("capture.provider_before", {
+      providerStatus: paypalPaymentStatus(before),
+      recoveryStatus: beforeStatus,
+    });
     if (beforeStatus === "completed") {
       const completed = completedCapture(before, {
         amountCents: pending.amountCents,
@@ -1683,26 +1713,41 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
         paypalOrderId: pending.paypalOrderId,
       });
       if (!completed) throw new Error("PAYMENT_MISMATCH");
-      return res.json(
-        await finalizeCapture(client.hash, pending.localId, completed)
+      trace.info("capture.before_verified", { captureVerified: true });
+      trace.info("capture.finalize_start");
+      const result = await finalizeCapture(
+        client.hash,
+        pending.localId,
+        completed
       );
+      trace.info("capture.finalize_complete", { captureVerified: true });
+      return res.json(result);
     }
     if (beforeStatus === "pending") {
+      trace.warn("capture.provider_pending", { providerStatus: "PENDING" });
       await markPaymentPending(client.hash, pending.localId);
       const result = paymentStatusError(paypalPaymentStatus(before));
       return sendError(res, 409, result.message, result.code);
     }
     if (beforeStatus === "retryable") {
+      trace.warn("capture.provider_retryable", {
+        providerStatus: paypalPaymentStatus(before),
+      });
       await resetPaymentAttempt(client.hash, pending.localId);
       const result = paymentStatusError(paypalPaymentStatus(before));
       return sendError(res, 409, result.message, result.code);
     }
     if (paypalPaymentStatus(before) !== "APPROVED") {
+      trace.warn("capture.approval_required", {
+        providerStatus: paypalPaymentStatus(before),
+      });
       const result = paymentStatusError(paypalPaymentStatus(before));
       return sendError(res, 409, result.message, result.code);
     }
 
+    trace.info("capture.mark_pending");
     await markPaymentPending(client.hash, pending.localId);
+    trace.info("capture.provider_request");
     const payload = await capturePaypalOrder(
       pending.paypalOrderId,
       pending.localId
@@ -1712,10 +1757,21 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
       reference: pending.reference,
       paypalOrderId: pending.paypalOrderId,
     });
-    if (completed)
-      return res.json(
-        await finalizeCapture(client.hash, pending.localId, completed)
+    trace.info("capture.provider_response", {
+      providerStatus: paypalPaymentStatus(payload),
+      captureVerified: Boolean(completed),
+    });
+    if (completed) {
+      trace.info("capture.finalize_start");
+      const result = await finalizeCapture(
+        client.hash,
+        pending.localId,
+        completed
       );
+      trace.info("capture.finalize_complete", { captureVerified: true });
+      return res.json(result);
+    }
+    trace.warn("capture.verify_failed", { captureVerified: false });
     const result = paymentStatusError(paypalPaymentStatus(payload));
     if (result.code === "PAYMENT_RETRY")
       await resetPaymentAttempt(client.hash, pending.localId);
@@ -1723,6 +1779,7 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
     return sendError(res, 409, result.message, result.code);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
+    trace.error("capture.failed", { errorCode: safePaymentErrorCode(error) });
     if (message === "ORDER_NOT_FOUND")
       return sendError(res, 404, "Order not found", "ORDER_NOT_FOUND");
     if (message === "ORDER_NOT_READY")
@@ -1750,8 +1807,13 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
       // A timeout or provider rejection is not proof of failure. Reconcile
       // first; only a conclusive no-capture state resets the accepted order.
       try {
+        trace.info("capture.reconcile_start");
         const reconciled = await getPaypalOrder(pending.paypalOrderId);
         const status = recoveryStatus(reconciled);
+        trace.info("capture.reconcile_result", {
+          providerStatus: paypalPaymentStatus(reconciled),
+          recoveryStatus: status,
+        });
         if (status === "completed") {
           const completed = completedCapture(reconciled, {
             amountCents: pending.amountCents,
@@ -1765,9 +1827,14 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
               "Payment verification did not match the stored order",
               "PAYMENT_MISMATCH"
             );
-          return res.json(
-            await finalizeCapture(client.hash, pending.localId, completed)
+          trace.info("capture.finalize_start");
+          const result = await finalizeCapture(
+            client.hash,
+            pending.localId,
+            completed
           );
+          trace.info("capture.finalize_complete", { captureVerified: true });
+          return res.json(result);
         }
         if (
           status === "retryable" ||
@@ -1788,10 +1855,16 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
           "Payment status is uncertain; verify payment before retrying",
           "PAYMENT_UNKNOWN"
         );
-      } catch {
+      } catch (reconcileError) {
+        trace.error("capture.reconcile_failed", {
+          errorCode: safePaymentErrorCode(reconcileError),
+        });
         try {
           await markPaymentPending(client.hash, pending.localId);
-        } catch {
+        } catch (pendingError) {
+          trace.error("capture.preserve_pending_failed", {
+            errorCode: safePaymentErrorCode(pendingError),
+          });
           /* preserve the original provider uncertainty */
         }
         return sendError(
