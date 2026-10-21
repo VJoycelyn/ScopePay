@@ -40,5 +40,5 @@ The application passed TypeScript checking, its production build, 12 automated t
 ## Links and remaining submission steps
 
 - Hosted demo: [ScopePay on Manus](https://kindred-vj2hs3rd.manus.space) is live. Replace this with the ScopePay vanity URL only after that exact address is successfully assigned.
-- Public source repository: pending owner approval and public setup.
+- Public source repository: https://github.com/VJoycelyn/ScopePay (public; root MIT license detected by GitHub).
 - Public YouTube demo under 3 minutes: pending recording after the end-to-end Sandbox capture walkthrough.

@@ -1,14 +1,14 @@
 # ScopePay: finish the entry and give it its strongest chance
 
-**ScopePay is not yet submission-ready.** The application and source package exist, and real AI, sandbox authentication, and sandbox order creation have been exercised. We still need the actual buyer-approved capture demonstration, a public repository, a public YouTube video, and verified free judge access. Your personal eligibility and ownership declarations must also be confirmed. No project can be guaranteed to win.
+**ScopePay is not yet submission-ready.** The live demo and public MIT source repository now exist, and real AI, sandbox authentication, and sandbox order creation have been exercised. Still open: the actual buyer-approved capture, a public YouTube video, verified free judge access through judging, your personal eligibility/ownership attestations, and the requested ScopePay-branded hostname change. No project can be guaranteed to win.
 
 ## 1. Resolve the ScopePay URL first
 
-The application name, browser title, navigation, favicon, and source package already use **ScopePay**. Changing these does not change a hostname. The current development Preview address is platform-managed; the available project configuration does not expose a supported hostname-renaming operation. A public address has not been supplied or verified in this conversation.
+The application name, browser title, navigation, favicon, and source package use **ScopePay**. The live site is currently [https://kindred-vj2hs3rd.manus.space](https://kindred-vj2hs3rd.manus.space); that platform-assigned address is verified live, but it does not say ScopePay.
 
-Send the current website URL, or a screenshot of the app's Publish/Domain settings with no secrets visible. If the platform offers an editable published subdomain, request `scopepay` and let it check availability; do not assume that exact name is available. If it is taken, `scopepay-venetta` is a proposed fallback, not an allocated address. If the displayed address is only Preview, choose a stable published address when releasing the app rather than submitting a development Preview link. Do not purchase a domain just to meet the hackathon: hosting is optional under the rules. [1] [2]
+The official Manus help page says paid users can modify the subdomain of a deployed website. In the project's publishing/domain settings, request `scopepay` and let the service check availability; do not assume it is available. I have not changed the hostname because the current project tooling does not expose the account's website-address control. If the name is taken, choose and verify another ScopePay-branded subdomain. Do not create a replacement project, expose secrets, or buy a domain just to meet the hackathon. Hosting is optional under the rules. [1] [2] [5]
 
-After any hostname change, create fresh client links on the final origin. The links contain private review capabilities, so do not put an owner's workspace token or a real client's review link in the public submission. Test the final home, setup, and client-review pages from a signed-out browser. Keep the same working project and database; do not create a replacement project merely to rename it.
+After a hostname change, update the live-demo links in `README.md`, `HACKATHON_SUBMISSION.md`, and Devpost. Create fresh client-review links on the final origin. Client links contain private review capabilities: do not put a review link, an owner's workspace capability, or any real client's link in a public submission. Test the final home and client-review pages signed out while keeping the same project and database.
 
 ## 2. Confirm your entrant eligibility and rights
 
@@ -18,37 +18,29 @@ ScopePay was created during this task on October 20, within the October 1–Nove
 
 ## 3. Complete the actual sandbox payment walkthrough
 
-This is the most important unfinished technical step. Automated tests do not replace this walkthrough. Use only fictional project details and a PayPal **sandbox personal buyer** account, never a real buyer or the sandbox business merchant that owns the app.
+The current test uses only fictional data: **Northline Coffee**, scope version **2**, exact amount **USD $12.50**, and a PayPal **Sandbox** personal buyer. No real client or real-money payment is involved. The client accepted the displayed terms; the existing PayPal order is now waiting for the buyer step. Do not restart checkout or make a replacement order while this attempt is pending.
 
-1. Open ScopePay in Preview or the eventual published app. Keep the freelancer workspace in one normal browser window. Open `/setup` and confirm the database, AI, and PayPal sandbox configuration are available.
-2. Create a fictional project, or choose **Load sample project**. If you use the sample, keep its sample labeling visible; it is not proof of live AI drafting.
-3. In **Scope**, review every deliverable, exclusion, timeline, revision allowance, question, and price. Resolve the “Clarify before publishing” questions in the editable summary. For an easy payment test, use one explicitly reviewed line at **USD $12.34** so exact-cent handling is visible. This is a fictional test amount, not an AI valuation.
-4. Save the reviewed terms and publish the client-review link. Open it in a separate browser profile or private window. Confirm its total and version match what you published.
-5. Select **I have reviewed and accept this scope and price**, then click **Accept this scope**. Checkout should not be available before this acceptance.
-6. Click the PayPal sandbox checkout. Sign in with your sandbox **personal** buyer. Review the USD amount and approve inside PayPal. Hide all credentials from any recording.
-7. Wait for **Payment recorded by the sandbox**. Return to the freelancer workspace and refresh it. Verify that the payment/activity state persists. Cross-check the matching completed sandbox transaction and amount in PayPal's sandbox activity; record a redacted order/capture reference as evidence. Do not mark this milestone complete based on the button click alone.
-8. Test cancellation on a separate fictional document: cancel the PayPal popup and confirm the app does not become paid. If a payment is uncertain, use **Verify payment** before **Retry capture**. Do not create replacement orders blindly. If a browser error prevents the walkthrough, send the exact error with no passwords or API secrets, and fix that specific defect before recording.
-9. Analyze a new request against the agreed scope, create a priced change order, publish it, and repeat client acceptance and sandbox checkout for the extra work. This is the clearest proof of ScopePay's actual value.
+1. Continue the existing PayPal Sandbox buyer checkout at the current client-review page. Sign in with a sandbox **personal** buyer account, not the sandbox business merchant that owns the app. For a test account, use PayPal Developer Dashboard → Sandbox → Accounts and select a Personal buyer to view its sign-in details. Enter credentials only in PayPal's secure page; never send them in chat or put them into screenshots/recording.
+2. Confirm PayPal identifies this as **Sandbox** and displays **USD $12.50** for the fictional Northline Coffee scope, then approve the test payment.
+3. Return to the client page and wait for ScopePay's **Payment recorded by the sandbox** state. Return to the freelancer workspace and refresh it. Verify the paid/activity state persists. Cross-check the completed $12.50 test transaction in PayPal's Sandbox activity. Keep order/capture IDs redacted in anything public. Do not mark the milestone complete based on a button click or an order-creation response alone.
+4. If PayPal cancels or the result is uncertain, do not create another order blindly. Return to the current review, use **Verify payment** before **Retry capture** if those controls appear, and record the exact non-sensitive error. The app must never label an unverified/cancelled attempt as paid.
+5. After the basic capture succeeds, a stronger optional demo can analyze a new request against the fictional scope, have the freelancer create and price a change order, then repeat exact-version client approval and Sandbox checkout for the added work. Do not claim that second flow until it is separately demonstrated.
 
-The server is implemented to verify completed capture against the stored accepted amount, currency, order, and reference. These controls have helper-test coverage, but the browser buyer approval/capture milestone remains open until the steps above actually succeed. See `VALIDATION.md` and the JSON receipts for the measured boundaries.
+The server is implemented to verify completed capture against the stored accepted amount, currency, order, and reference. Automated helper/API tests are not a substitute for a buyer-approved browser capture. See `VALIDATION.md` and the JSON receipts for measured boundaries.
 
 ## 4. Close the judge-access requirement
 
 The rules permit either a hosted working demo or complete runnable repository instructions; they do **not** require buying hosting or a domain. Judges must nevertheless be able to use the functional project free of charge and without restriction through the end of judging. [1] [2]
 
-For this implementation, **a hosted demo is the recommended route**. Its database and AI service currently rely on the managed project environment. A public source ZIP with empty environment variables is not, by itself, a turnkey functional installation for a judge who lacks those runtime credentials. Keep the source setup instructions honest about that dependency.
-
-Authorize publication of the tested app, then wait for a confirmed successful publication and its actual permanent URL. Test that URL in a fresh browser: no owner login should be required to create an independent fictional workspace, run live AI, publish a review link, and perform the sandbox flow. Supply a dedicated test-only buyer account through the submission's appropriate testing-access instructions where required; never expose merchant API secrets, AI tokens, real account passwords, or your owner workspace capability.
+For this implementation, **a hosted demo is recommended** because its database and AI service rely on the managed project environment. The current public demo is [https://kindred-vj2hs3rd.manus.space](https://kindred-vj2hs3rd.manus.space). It opened signed out and allowed creation of a fictional workspace; verify the entire AI and buyer-payment path from a fresh visitor session before submission. A public source repository with empty environment variables is not, by itself, a turnkey functional installation for a judge who lacks the managed runtime services.
 
 Keep the app, required runtime services, and test access working through **December 15, 2026**, including the official judging-end time. Do not delete test accounts, break review links, replace the submitted build with an unfinished version, add a paywall, or require judges to request permission. Save the release that the video and description actually demonstrate. [1]
 
-## 5. Make the source repository public
+## 5. Public source repository — completed
 
-A public GitHub, GitLab, or Bitbucket repository is mandatory, even if the demo is hosted. It must contain the necessary source, assets, instructions, and a detectable open-source license. The ScopePay package already has the source, original icon, environment-name example, setup documentation, and root MIT `LICENSE`; its public repository URL is still missing. [1] [2]
+A public repository is mandatory even if the demo is hosted. This requirement is now met: **[VJoycelyn/ScopePay](https://github.com/VJoycelyn/ScopePay)**. GitHub recognizes the root `LICENSE` as MIT. The public snapshot includes the source, original icon, environment-name example, setup/architecture/validation notes, Devpost copy, and demo script. Its fresh lockfile install, TypeScript check, 12 tests, production build, and whitespace check passed.
 
-The proposed new repository is **VJoycelyn/ScopePay**, separate from Island Tales. Public creation has not been authorized or completed. Before releasing it, inspect the exact source release for credentials and personal data, retain the MIT license at the repository root, and ensure GitHub recognizes the license in About. Do not simply make Island Tales public or change its remote.
-
-The README should identify the final hosted demo, explain the managed database/AI dependency, give sandbox-only testing instructions, and link the architecture, validation notes, and video. Check that a signed-out visitor can open the repository and see the complete source. A downloadable ZIP alone does not satisfy the public-repository requirement. [1]
+The repository is separate from both Island Tales and the Manus-managed canonical source repository. The public-release scan excluded credentials, internal Manus workspace metadata, and an unused platform debug collector. A clean source checkout still depends on the managed database/AI environment for the hosted workflow; the README is explicit about that limitation. Do not put the client capability link or private buyer/merchant credentials in the repository.
 
 ## 6. Record the demo that matches the product promise
 
@@ -76,9 +68,9 @@ The official rules specify **equal weighting** for Technological Implementation,
 
 ## 8. Finish the Devpost form and submit early
 
-Use project name **ScopePay** and tagline **“Turn scope creep into approved, paid work.”** Adapt `HACKATHON_SUBMISSION.md` to what the final release truly does. Add the actual public repository, working-demo/testing-access instructions, and public YouTube URL. List PayPal Orders v2 / JavaScript SDK sandbox, React, TypeScript, Express, MySQL, the actual AI runtime/model, and AI development assistance accurately. All materials must be English or have the required English translations. [1] [2]
+Use project name **ScopePay** and tagline **“Turn scope creep into approved, paid work.”** Adapt `HACKATHON_SUBMISSION.md` to what the final release truly does. Add the public repository, working-demo/testing-access instructions, and public YouTube URL. List PayPal Orders v2 / JavaScript SDK sandbox, React, TypeScript, Express, MySQL, the actual AI runtime/model, and AI development assistance accurately. All materials must be English or have the required English translations. [1] [2]
 
-Do not leave placeholder links or claims that buyer capture has been completed before it has. Review permissions, originality, privacy, and the submission terms yourself. Click the final submission action—not merely Save draft—and keep its timestamped confirmation.
+Do not leave placeholder links or claim the buyer capture until it has been verified. Review permissions, originality, privacy, and the submission terms yourself. Click the final submission action—not merely Save draft—and keep its timestamped confirmation.
 
 The official deadline is **November 12, 2026 at noon Pacific Standard Time / 8:00 p.m. UTC / 4:00 p.m. Atlantic Standard Time**. Aim to submit by **November 11**, leaving time for video visibility, link, and form problems. After the submission window closes, substantive edits are generally not allowed except the narrow organizer-authorized corrections described in the rules. [1] [4]
 
@@ -86,16 +78,16 @@ The official deadline is **November 12, 2026 at noon Pacific Standard Time / 8:0
 
 - [x] New ScopePay application and source package exist.
 - [x] Meaningful live AI drafting and change analysis have been exercised.
-- [x] PayPal sandbox credentials and real order creation have been verified.
+- [x] PayPal Sandbox credentials and real order creation have been verified.
 - [x] Root MIT license, original asset, setup notes, and English submission/demo drafts exist.
+- [x] Live hosted demo verified at https://kindred-vj2hs3rd.manus.space.
+- [x] Public source repository and GitHub-detected MIT license verified: https://github.com/VJoycelyn/ScopePay.
+- [ ] Complete the existing USD $12.50 sandbox personal-buyer approval and verify capture in ScopePay and PayPal Sandbox.
 - [ ] Confirm your personal eligibility, ownership, and third-party permissions.
-- [ ] Provide the current URL; select and verify the ScopePay-branded published hostname if available.
-- [ ] Demonstrate buyer-approved completed sandbox capture for the final workflow.
+- [ ] Change the host to an available ScopePay-branded subdomain and update every link, if available in the website settings.
 - [ ] Establish and test free functional judge access through the judging period.
-- [ ] Publish the complete source repository and verify its detected license.
 - [ ] Upload and verify a Public YouTube demo strictly under three minutes.
-- [ ] Replace every draft link/status statement with the actual final evidence.
-- [ ] Submit all required Devpost fields before the deadline and save confirmation.
+- [ ] Replace every draft status with final evidence; submit all required Devpost fields and save confirmation.
 
 ## References
 
@@ -103,3 +95,4 @@ The official deadline is **November 12, 2026 at noon Pacific Standard Time / 8:0
 [2]: https://paypalaihackathon.devpost.com/ "PayPal AI Hackathon Overview and Submission Requirements"
 [3]: https://paypalaihackathon.devpost.com/details/faqs "PayPal AI Hackathon FAQs"
 [4]: https://paypalaihackathon.devpost.com/details/dates "PayPal AI Hackathon Official Dates"
+[5]: https://help.manus.im/en/articles/11711203-how-can-i-connect-the-website-created-by-manus-to-my-custom-domain "Manus Help: Connect a website to a custom domain and edit a deployed subdomain"
