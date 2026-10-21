@@ -1,6 +1,7 @@
 # ScopePay feature and hackathon audit
 
-**Review date:** October 21, 2026  
+**Review date:** October 21, 2026
+
 **Scope:** Read-only review of the current source and the official PayPal AI Hackathon rules. This is not a penetration test, legal opinion, judging decision, or guarantee of eligibility or winning.
 
 ## Bottom line
