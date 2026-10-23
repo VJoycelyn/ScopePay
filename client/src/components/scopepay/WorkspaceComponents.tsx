@@ -9,6 +9,7 @@ import {
   Check,
   ChevronDown,
   ClipboardList,
+  ExternalLink,
   FilePlus2,
   HelpCircle,
   Info,
@@ -33,8 +34,11 @@ import type {
   Workspace,
 } from "@shared/scopepay";
 import { DocumentEditor, ShareLink } from "./DocumentEditor";
+import { ScopePayApiError, scopepayApi } from "../../lib/scopepay-api";
+import { safeSandboxApprovalUrl } from "../../lib/paypal-safety";
 import {
   EmptyState,
+  errorMessage,
   formatDate,
   formatMoney,
   formatTime,
@@ -415,11 +419,62 @@ export function ActivityList({ project }: { project: ScopeProject }) {
 export function PaymentsPanel({
   project,
   onReload,
+  onProject,
 }: {
   project: ScopeProject;
   onReload: () => void;
+  onProject: (project: ScopeProject) => void;
 }) {
   const docs = [project.quote, ...project.changes];
+  const [recoveryDocumentId, setRecoveryDocumentId] = useState<string | null>(
+    null
+  );
+  const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
+  const [reissuingId, setReissuingId] = useState<string | null>(null);
+  const [recoveryError, setRecoveryError] = useState<Record<string, string>>(
+    {}
+  );
+  const [approvalLinks, setApprovalLinks] = useState<Record<string, string>>(
+    {}
+  );
+  const [reissuedLinks, setReissuedLinks] = useState<Record<string, boolean>>(
+    {}
+  );
+  const recover = async (document: ScopeDocument) => {
+    if (!confirmed[document.id]) return;
+    setReissuingId(document.id);
+    setRecoveryError(current => ({ ...current, [document.id]: "" }));
+    try {
+      const result = await scopepayApi.reissueOrder(
+        project.id,
+        document.id,
+        document.version
+      );
+      onProject(result.project);
+      setReissuedLinks(current => ({ ...current, [document.id]: true }));
+      const safeUrl = safeSandboxApprovalUrl(result.approvalUrl);
+      setApprovalLinks(current => ({
+        ...current,
+        [document.id]: safeUrl ?? "",
+      }));
+      if (!safeUrl)
+        setRecoveryError(current => ({
+          ...current,
+          [document.id]:
+            "The order was prepared, but no valid Sandbox approval URL was returned. Use the fresh review link below to continue; do not create another replacement.",
+        }));
+    } catch (error) {
+      setRecoveryError(current => ({
+        ...current,
+        [document.id]:
+          error instanceof ScopePayApiError
+            ? errorMessage(error)
+            : "Recovery could not be completed. The server did not create a replacement order.",
+      }));
+    } finally {
+      setReissuingId(null);
+    }
+  };
   return (
     <section className="panel payments-panel">
       <div className="panel-heading">
@@ -443,28 +498,133 @@ export function PaymentsPanel({
           <span>STATUS</span>
           <span>LAST EVENT</span>
         </div>
-        {docs.map(document => (
-          <div className="payment-row" key={document.id}>
-            <div>
-              <strong>{document.title}</strong>
-              <small>
-                Version {document.version} ·{" "}
-                {document.kind === "quote" ? "Quote" : "Change order"}
-              </small>
+        {docs.map(document => {
+          const canRecover =
+            (document.status === "accepted" ||
+              document.status === "payment_pending") &&
+            Boolean(document.paypalOrderId) &&
+            !document.paypalCaptureId;
+          const recoveryOpen = recoveryDocumentId === document.id;
+          return (
+            <div className="payment-row" key={document.id}>
+              <div>
+                <strong>{document.title}</strong>
+                <small>
+                  Version {document.version} ·{" "}
+                  {document.kind === "quote" ? "Quote" : "Change order"}
+                </small>
+              </div>
+              <strong className="mono">
+                {formatMoney(document.totalCents)}
+              </strong>
+              <StatusPill status={document.status} />
+              <span className="payment-event">
+                {document.paidAt
+                  ? `Paid ${formatDate(document.paidAt)}`
+                  : document.acceptedAt
+                    ? `Accepted ${formatDate(document.acceptedAt)}`
+                    : document.status === "published"
+                      ? "Awaiting client"
+                      : "Draft only"}
+              </span>
+              {canRecover && (
+                <div className="payment-row-recovery">
+                  <button
+                    className="text-button recovery-reveal"
+                    aria-expanded={recoveryOpen}
+                    aria-controls={`payment-recovery-${document.id}`}
+                    onClick={() => {
+                      setRecoveryDocumentId(recoveryOpen ? null : document.id);
+                      setRecoveryError(current => ({
+                        ...current,
+                        [document.id]: "",
+                      }));
+                    }}
+                  >
+                    {recoveryOpen
+                      ? "Hide recovery options"
+                      : "Show recovery options"}
+                  </button>
+                  {recoveryOpen && (
+                    <div
+                      id={`payment-recovery-${document.id}`}
+                      className="payment-recovery"
+                    >
+                      <p>
+                        Create a new PayPal Sandbox order for this exact version
+                        and amount. This action does not capture payment. It
+                        leaves the accepted terms and existing same-version
+                        review link active; share the additional fresh link for
+                        PayPal's return to ScopePay.
+                      </p>
+                      <label className="recovery-check">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(confirmed[document.id])}
+                          onChange={event =>
+                            setConfirmed(current => ({
+                              ...current,
+                              [document.id]: event.target.checked,
+                            }))
+                          }
+                        />
+                        <span>
+                          I confirmed no payment was completed in PayPal Sandbox
+                        </span>
+                      </label>
+                      <button
+                        className="primary-button recovery-button"
+                        disabled={
+                          !confirmed[document.id] || reissuingId === document.id
+                        }
+                        onClick={() => void recover(document)}
+                      >
+                        {reissuingId === document.id ? (
+                          <LoaderCircle size={14} className="spin" />
+                        ) : null}
+                        {reissuingId === document.id
+                          ? "Preparing new Sandbox order…"
+                          : "Create replacement Sandbox order"}
+                      </button>
+                      {recoveryError[document.id] && (
+                        <div className="inline-message error">
+                          <span>{recoveryError[document.id]}</span>
+                        </div>
+                      )}
+                      {approvalLinks[document.id] && (
+                        <a
+                          className="paypal-continue-link"
+                          href={approvalLinks[document.id]}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          referrerPolicy="no-referrer"
+                        >
+                          Continue to PayPal <ExternalLink size={14} />
+                        </a>
+                      )}
+                      {reissuedLinks[document.id] && document.clientToken && (
+                        <div className="recovery-client-link">
+                          <p>
+                            The accepted scope and amount did not change. Copy
+                            and send this fresh continuation link; the existing
+                            same-version buyer link remains active.
+                          </p>
+                          <ShareLink
+                            token={document.clientToken}
+                            status={document.status}
+                            projectId={project.id}
+                            documentId={document.id}
+                            onUpdated={onProject}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-            <strong className="mono">{formatMoney(document.totalCents)}</strong>
-            <StatusPill status={document.status} />
-            <span className="payment-event">
-              {document.paidAt
-                ? `Paid ${formatDate(document.paidAt)}`
-                : document.acceptedAt
-                  ? `Accepted ${formatDate(document.acceptedAt)}`
-                  : document.status === "published"
-                    ? "Awaiting client"
-                    : "Draft only"}
-            </span>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div className="disclaimer">
         <ShieldCheck size={16} />

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
   CreditCard,
+  ExternalLink,
   LoaderCircle,
   RefreshCw,
   ShieldCheck,
@@ -13,19 +14,24 @@ import type {
   ServiceStatus,
 } from "@shared/scopepay";
 import { ScopePayApiError, scopepayApi } from "../../lib/scopepay-api";
+import { safeSandboxApprovalUrl } from "../../lib/paypal-safety";
 import { errorMessage, formatMoney } from "./shared";
 
 const PAYPAL_LOG_PREFIX = "[ScopePay PayPal]";
 const SAFE_API_CODES = new Set([
+  "PAYPAL_ORDER_NOT_FOUND",
+  "ORDER_NOT_FOUND",
+  "CAPTURE_IN_PROGRESS",
+  "ORDER_SUPERSEDED",
+  "ORDER_PENDING",
   "PAYMENT_PENDING",
   "PAYMENT_UNKNOWN",
   "PAYMENT_RETRY",
   "PAYMENT_MISMATCH",
+  "PAYPAL_PROVIDER_REJECTED",
   "PAYPAL_NOT_CONFIGURED",
   "PAYPAL_UNAVAILABLE",
   "RATE_LIMITED",
-  "ORDER_NOT_FOUND",
-  "ORDER_PENDING",
   "ACCEPTANCE_REQUIRED",
   "INTERNAL_ERROR",
   "VERSION_MISMATCH",
@@ -101,32 +107,29 @@ function errorDiagnostics(error: unknown): {
         httpStatus: SAFE_HTTP_STATUSES.has(error.status) ? error.status : null,
       };
     }
-    if (error instanceof TypeError) {
+    if (error instanceof TypeError)
       return {
         errorType: "TypeError",
         errorCode: "UNKNOWN_ERROR",
         httpStatus: null,
       };
-    }
     if (
       (typeof DOMException !== "undefined" &&
         error instanceof DOMException &&
         error.name === "AbortError") ||
       (error instanceof Error && error.name === "AbortError")
-    ) {
+    )
       return {
         errorType: "AbortError",
         errorCode: "UNKNOWN_ERROR",
         httpStatus: null,
       };
-    }
-    if (error instanceof Error) {
+    if (error instanceof Error)
       return {
         errorType: "Error",
         errorCode: "UNKNOWN_ERROR",
         httpStatus: null,
       };
-    }
   } catch {
     // Return the safest diagnostic if an unusual error object cannot be inspected.
   }
@@ -155,6 +158,10 @@ function logPayPal(
   } catch {
     // Console and serialization failures must never change the payment result.
   }
+}
+
+function errorCode(error: unknown): string | undefined {
+  return error instanceof ScopePayApiError ? error.code : undefined;
 }
 
 declare global {
@@ -189,11 +196,15 @@ export function PayPalCheckout({
     "idle" | "creating" | "capturing" | "recovering" | "paid" | "error"
   >("idle");
   const [paymentError, setPaymentError] = useState("");
+  const [paymentErrorCode, setPaymentErrorCode] = useState<string>();
   const [orderId, setOrderId] = useState(review.document.paypalOrderId ?? "");
+  const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
+
   useEffect(() => {
     if (review.document.paypalOrderId)
       setOrderId(review.document.paypalOrderId);
   }, [review.document.paypalOrderId]);
+
   useEffect(() => {
     if (
       !status?.paypalConfigured ||
@@ -204,10 +215,16 @@ export function PayPalCheckout({
     const script = document.createElement("script");
     script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(status.paypalClientId)}&currency=USD&intent=capture`;
     script.async = true;
-    script.onload = () => setSdkReady(true);
+    script.onload = () => {
+      if (window.paypal?.Buttons) setSdkReady(true);
+      else
+        setSdkError(
+          "PayPal checkout loaded without its button API. You can still prepare a direct Sandbox link below."
+        );
+    };
     script.onerror = () =>
       setSdkError(
-        "PayPal checkout could not load. Check your connection or ask the workspace owner to verify sandbox setup."
+        "PayPal checkout could not load. You can still prepare a direct Sandbox link below, or ask the workspace owner to verify Sandbox setup."
       );
     document.head.appendChild(script);
     return () => {
@@ -218,6 +235,38 @@ export function PayPalCheckout({
     status?.paypalConfigured,
     review.document.status,
   ]);
+
+  const clearPaymentError = () => {
+    setPaymentError("");
+    setPaymentErrorCode(undefined);
+  };
+
+  const prepareOrder = async () => {
+    setPaymentState("creating");
+    clearPaymentError();
+    setApprovalUrl(null);
+    try {
+      const result = await scopepayApi.createOrder(
+        token,
+        review.document.version
+      );
+      setOrderId(result.id);
+      const safeUrl = safeSandboxApprovalUrl(result.approvalUrl);
+      setApprovalUrl(safeUrl);
+      if (!safeUrl)
+        setPaymentError(
+          "The server prepared the PayPal order but did not return a usable approval link. Try the PayPal button or ask the workspace owner to verify Sandbox setup."
+        );
+      setPaymentState("idle");
+      return result;
+    } catch (error) {
+      setPaymentState("error");
+      setPaymentError(errorMessage(error));
+      setPaymentErrorCode(errorCode(error));
+      return null;
+    }
+  };
+
   const applyPaidResult = (result: PaymentResult): void => {
     setOrderId(result.orderId);
     onReview({
@@ -232,6 +281,7 @@ export function PayPalCheckout({
     });
     setPaymentState("paid");
   };
+
   const capture = async (
     id: string,
     traceId = createTraceId()
@@ -245,7 +295,7 @@ export function PayPalCheckout({
       orderIdPresent: Boolean(id),
     };
     setPaymentState("capturing");
-    setPaymentError("");
+    clearPaymentError();
     logPayPal("info", "capture.request", {
       ...captureFields,
       elapsedMs: elapsedMs(startedAt),
@@ -268,6 +318,7 @@ export function PayPalCheckout({
     } catch (error) {
       setPaymentState("error");
       setPaymentError(errorMessage(error));
+      setPaymentErrorCode(errorCode(error));
       logPayPal("error", "capture.failed", {
         ...captureFields,
         success: false,
@@ -277,28 +328,32 @@ export function PayPalCheckout({
       return { success: false, error };
     }
   };
+
   const verify = async () => {
     if (!orderId) {
       setPaymentError(
-        "No saved PayPal order is available yet. Start checkout again."
+        "No saved PayPal order is available yet. Ask the workspace owner to check PayPal Sandbox Activity and use Payments panel recovery."
       );
+      setPaymentErrorCode("PAYPAL_ORDER_NOT_FOUND");
       return;
     }
     setPaymentState("recovering");
-    setPaymentError("");
+    clearPaymentError();
     try {
       const latest = await scopepayApi.reconcileOrder(token, orderId);
       onReview(latest);
       setPaymentState(latest.document.status === "paid" ? "paid" : "error");
       if (latest.document.status !== "paid")
         setPaymentError(
-          "Payment is not confirmed yet. Verify again or retry capture when the server says it is safe."
+          "Payment is not confirmed yet. The server remains authoritative; do not create a replacement while this order is pending."
         );
     } catch (error) {
       setPaymentState("error");
       setPaymentError(errorMessage(error));
+      setPaymentErrorCode(errorCode(error));
     }
   };
+
   useEffect(() => {
     if (
       !sdkReady ||
@@ -318,31 +373,19 @@ export function PayPalCheckout({
           height: 42,
         },
         createOrder: async () => {
-          setPaymentState("creating");
-          setPaymentError("");
-          try {
-            const result = await scopepayApi.createOrder(
-              token,
-              review.document.version
-            );
-            setOrderId(result.id);
-            return result.id;
-          } catch (error) {
-            setPaymentState("error");
-            setPaymentError(errorMessage(error));
-            throw error;
-          }
+          const result = await prepareOrder();
+          if (!result) throw new Error("PayPal order preparation failed");
+          return result.id;
         },
         onApprove: async (data: { orderID: string }) => {
           const traceId = createTraceId();
           const startedAt = nowMs();
-          const orderIdPresent = Boolean(data.orderID);
           const approveFields = {
             traceId,
             scopeVersion: review.document.version,
             amountCents: review.document.totalCents,
             currency: review.document.currency,
-            orderIdPresent,
+            orderIdPresent: Boolean(data.orderID),
           };
           logPayPal("info", "onApprove.enter", {
             ...approveFields,
@@ -359,27 +402,24 @@ export function PayPalCheckout({
         onCancel: () => {
           setPaymentState("idle");
           setPaymentError(
-            "Checkout was cancelled. Your approval is unchanged and you can try again."
+            "Checkout was cancelled. No capture was recorded; your order remains available."
           );
         },
-        onError: (error: unknown) => {
+        onError: () => {
           setPaymentState("error");
           setPaymentError(
-            error instanceof Error
-              ? error.message
-              : "PayPal returned an error. Verify payment before retrying."
+            "PayPal checkout could not complete. No payment was recorded; verify the order before trying again."
           );
         },
       })
       .render(containerRef.current)
-      .catch((error: unknown) =>
+      .catch(() =>
         setSdkError(
-          error instanceof Error
-            ? error.message
-            : "PayPal checkout could not start."
+          "PayPal checkout could not start. You can still prepare a direct Sandbox link below, or ask the workspace owner to verify Sandbox setup."
         )
       );
   }, [sdkReady, token, review.document.version, review.document.status]);
+
   if (review.document.status === "paid" || paymentState === "paid")
     return (
       <div className="paid-confirmation">
@@ -390,11 +430,14 @@ export function PayPalCheckout({
         </div>
       </div>
     );
+
   if (
     review.document.status === "payment_pending" ||
-    paymentState === "error" ||
     paymentState === "recovering"
-  )
+  ) {
+    const orderUnavailable =
+      paymentErrorCode === "PAYPAL_ORDER_NOT_FOUND" ||
+      paymentErrorCode === "ORDER_NOT_FOUND";
     return (
       <div className="checkout-box">
         <div className="checkout-head">
@@ -411,8 +454,18 @@ export function PayPalCheckout({
         {paymentError && (
           <div className="inline-message error">
             <XCircle size={14} />
-            {paymentError}
+            <span>{paymentError}</span>
+            <button className="text-button" onClick={clearPaymentError}>
+              Dismiss
+            </button>
           </div>
+        )}
+        {orderUnavailable && (
+          <p className="action-note recovery-instruction">
+            Ask the workspace owner to check PayPal Sandbox Activity and use the
+            Payments panel recovery. Do not retry capture for this missing
+            order.
+          </p>
         )}
         <div className="editor-actions">
           <button
@@ -427,25 +480,60 @@ export function PayPalCheckout({
             )}
             {paymentState === "recovering" ? "Verifying…" : "Verify payment"}
           </button>
-          <button
-            className="primary-button"
-            disabled={paymentState === "capturing" || !orderId}
-            onClick={() => void capture(orderId)}
-          >
-            {paymentState === "capturing" ? (
-              <LoaderCircle className="spin" size={15} />
-            ) : (
-              <CreditCard size={15} />
-            )}
-            {paymentState === "capturing" ? "Retrying…" : "Retry capture"}
-          </button>
+          {!orderUnavailable && (
+            <button
+              className="primary-button"
+              disabled={paymentState === "capturing" || !orderId}
+              onClick={() => void capture(orderId)}
+            >
+              {paymentState === "capturing" ? (
+                <LoaderCircle className="spin" size={15} />
+              ) : (
+                <CreditCard size={15} />
+              )}
+              {paymentState === "capturing" ? "Retrying…" : "Retry capture"}
+            </button>
+          )}
         </div>
+        {!orderUnavailable && (
+          <div className="direct-paypal-actions">
+            <button
+              className="secondary-button"
+              disabled={
+                paymentState === "creating" || paymentState === "capturing"
+              }
+              onClick={() => void prepareOrder()}
+            >
+              {paymentState === "creating" ? (
+                <LoaderCircle className="spin" size={15} />
+              ) : (
+                <ExternalLink size={15} />
+              )}
+              {paymentState === "creating"
+                ? "Preparing PayPal link…"
+                : "Prepare PayPal continuation link"}
+            </button>
+          </div>
+        )}
+        {approvalUrl && !orderUnavailable && (
+          <a
+            className="paypal-continue-link"
+            href={approvalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            referrerPolicy="no-referrer"
+          >
+            Continue to PayPal <ExternalLink size={14} />
+          </a>
+        )}
         <small className="checkout-footnote">
           Retry is server-checked and uses the same PayPal order; it never
           blindly creates a replacement.
         </small>
       </div>
     );
+  }
+
   if (!status?.paypalConfigured || !status.paypalClientId)
     return (
       <div className="checkout-disabled">
@@ -459,6 +547,7 @@ export function PayPalCheckout({
         </div>
       </div>
     );
+
   return (
     <div className="checkout-box">
       <div className="checkout-head">
@@ -468,24 +557,54 @@ export function PayPalCheckout({
         </div>
         <ShieldCheck size={18} />
       </div>
-      {sdkError ? (
+      {sdkError && (
         <div className="inline-message error">
           <XCircle size={14} />
-          {sdkError}
+          <span>{sdkError}</span>
         </div>
-      ) : (
-        <>
-          {!sdkReady && (
-            <div className="checkout-loading">
-              <LoaderCircle size={15} className="spin" />
-              Loading secure sandbox checkout…
-            </div>
+      )}
+      {!sdkError && !sdkReady && (
+        <div className="checkout-loading">
+          <LoaderCircle size={15} className="spin" />
+          Loading secure sandbox checkout…
+        </div>
+      )}
+      <div
+        ref={containerRef}
+        className={
+          sdkReady && !sdkError ? "paypal-buttons" : "paypal-buttons hidden"
+        }
+      />
+      <div className="direct-paypal-actions">
+        <button
+          className="secondary-button"
+          disabled={paymentState === "creating" || paymentState === "capturing"}
+          onClick={() => void prepareOrder()}
+        >
+          {paymentState === "creating" ? (
+            <LoaderCircle className="spin" size={15} />
+          ) : (
+            <ExternalLink size={15} />
           )}
-          <div
-            ref={containerRef}
-            className={sdkReady ? "paypal-buttons" : "paypal-buttons hidden"}
-          />
-        </>
+          {paymentState === "creating"
+            ? "Preparing direct link…"
+            : "Prepare direct PayPal link"}
+        </button>
+        <small>
+          This is a two-step action. First prepare the server order, then click
+          the link to continue in PayPal.
+        </small>
+      </div>
+      {approvalUrl && (
+        <a
+          className="paypal-continue-link"
+          href={approvalUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          referrerPolicy="no-referrer"
+        >
+          Continue to PayPal <ExternalLink size={14} />
+        </a>
       )}
       {(paymentState === "creating" || paymentState === "capturing") && (
         <div className="checkout-state">
@@ -498,15 +617,15 @@ export function PayPalCheckout({
       {paymentError && (
         <div className="inline-message error">
           <XCircle size={14} />
-          {paymentError}
-          <button className="text-button" onClick={() => setPaymentError("")}>
+          <span>{paymentError}</span>
+          <button className="text-button" onClick={clearPaymentError}>
             Dismiss
           </button>
         </div>
       )}
       <small className="checkout-footnote">
-        You will be redirected to PayPal's sandbox. ScopePay records payment
-        only after the server verifies a completed capture.
+        ScopePay records payment only after the server verifies a completed
+        capture in PayPal Sandbox.
       </small>
     </div>
   );

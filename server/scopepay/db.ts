@@ -35,6 +35,7 @@ export type OrderRow = RowDataPacket & {
   request_id: string;
   capture_id: string | null;
   status: string;
+  updated_at: Date | string;
 };
 
 export function getScopePayPool(): Pool {
@@ -150,21 +151,35 @@ export async function withTokenLock<T>(
     token: ClientTokenRow
   ) => Promise<{ value: T; workspace?: Workspace }>
 ): Promise<T> {
+  // Read the token without a lock only to discover its workspace. Every
+  // transaction then locks workspace first, followed by the token row, so
+  // concurrent client and owner operations use one global lock order.
+  const [initialRows] = await getScopePayPool().execute<ClientTokenRow[]>(
+    "SELECT token_hash, workspace_id, project_id, document_id, document_version, revoked FROM scopepay_client_tokens WHERE token_hash = ? LIMIT 1",
+    [tokenHash]
+  );
+  const initial = initialRows[0];
+  if (!initial || initial.revoked) throw new Error("CLIENT_TOKEN_NOT_FOUND");
   const connection = await getScopePayPool().getConnection();
   try {
     await connection.beginTransaction();
+    const [workspaceRows] = await connection.execute<WorkspaceRow[]>(
+      "SELECT id, token_hash, documents FROM scopepay_workspaces WHERE id = ? FOR UPDATE",
+      [initial.workspace_id]
+    );
+    const workspaceRow = workspaceRows[0];
+    if (!workspaceRow) throw new Error("WORKSPACE_NOT_FOUND");
     const [tokenRows] = await connection.execute<ClientTokenRow[]>(
       "SELECT token_hash, workspace_id, project_id, document_id, document_version, revoked FROM scopepay_client_tokens WHERE token_hash = ? FOR UPDATE",
       [tokenHash]
     );
     const token = tokenRows[0];
-    if (!token || token.revoked) throw new Error("CLIENT_TOKEN_NOT_FOUND");
-    const [workspaceRows] = await connection.execute<WorkspaceRow[]>(
-      "SELECT id, token_hash, documents FROM scopepay_workspaces WHERE id = ? FOR UPDATE",
-      [token.workspace_id]
-    );
-    const workspaceRow = workspaceRows[0];
-    if (!workspaceRow) throw new Error("WORKSPACE_NOT_FOUND");
+    if (
+      !token ||
+      token.revoked ||
+      token.workspace_id !== initial.workspace_id
+    )
+      throw new Error("CLIENT_TOKEN_NOT_FOUND");
     const workspace = parseWorkspace(workspaceRow.documents);
     const result = await work(connection, workspaceRow, workspace, token);
     if (result.workspace) {
@@ -225,7 +240,7 @@ export async function findOrder(
   orderId: string
 ): Promise<OrderRow | null> {
   const [rows] = await connection.execute<OrderRow[]>(
-    "SELECT id, workspace_id, project_id, document_id, document_version, amount_cents, currency, paypal_order_id, request_id, capture_id, status FROM scopepay_orders WHERE workspace_id = ? AND (id = ? OR paypal_order_id = ?) LIMIT 1 FOR UPDATE",
+    "SELECT id, workspace_id, project_id, document_id, document_version, amount_cents, currency, paypal_order_id, request_id, capture_id, status, updated_at FROM scopepay_orders WHERE workspace_id = ? AND (id = ? OR paypal_order_id = ?) LIMIT 1 FOR UPDATE",
     [workspaceId, orderId, orderId]
   );
   return rows[0] ?? null;
@@ -238,7 +253,7 @@ export async function findDocumentOrder(
   version: number
 ): Promise<OrderRow | null> {
   const [rows] = await connection.execute<OrderRow[]>(
-    "SELECT id, workspace_id, project_id, document_id, document_version, amount_cents, currency, paypal_order_id, request_id, capture_id, status FROM scopepay_orders WHERE workspace_id = ? AND document_id = ? AND document_version = ? LIMIT 1 FOR UPDATE",
+    "SELECT id, workspace_id, project_id, document_id, document_version, amount_cents, currency, paypal_order_id, request_id, capture_id, status, updated_at FROM scopepay_orders WHERE workspace_id = ? AND document_id = ? AND document_version = ? LIMIT 1 FOR UPDATE",
     [workspaceId, documentId, version]
   );
   return rows[0] ?? null;
@@ -247,7 +262,12 @@ export async function findDocumentOrder(
 export async function updateOrder(
   connection: PoolConnection,
   orderId: string,
-  values: { status?: string; paypalOrderId?: string; captureId?: string }
+  values: {
+    status?: string;
+    paypalOrderId?: string | null;
+    captureId?: string | null;
+    requestId?: string;
+  }
 ): Promise<void> {
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -255,13 +275,17 @@ export async function updateOrder(
     sets.push("status = ?");
     params.push(values.status);
   }
-  if (values.paypalOrderId) {
+  if (values.paypalOrderId !== undefined) {
     sets.push("paypal_order_id = ?");
     params.push(values.paypalOrderId);
   }
-  if (values.captureId) {
+  if (values.captureId !== undefined) {
     sets.push("capture_id = ?");
     params.push(values.captureId);
+  }
+  if (values.requestId) {
+    sets.push("request_id = ?");
+    params.push(values.requestId);
   }
   if (sets.length === 0) return;
   params.push(orderId);

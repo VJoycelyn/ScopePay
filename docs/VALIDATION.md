@@ -14,6 +14,12 @@ Three developer-authored synthetic change requests were run once each: a clearly
 
 The validator was corrected to permit an explicit unknown effort estimate of zero for advisory change analysis, while initial scope drafting still requires positive effort. Only the affected ecommerce case was rerun and returned a valid matching out-of-scope classification, with its result recorded separately in `SYNTHETIC_AI_RESULTS.json`. This is a tiny synthetic development check, not a representative accuracy benchmark, user study, or proof of business impact. The AI can still be wrong; human scope/price review remains required.
 
+## PayPal setup repair — October 23
+
+The live browser reported PayPal Sandbox configured and the Northline Coffee document still accepted at **version 2, USD 12.50**, with no recorded capture. The existing saved provider order returned `404 / INVALID_RESOURCE_ID` from PayPal Sandbox, so it is not safe to reuse. The active Client ID/Secret pair separately passed Sandbox OAuth; secret values were not read, and only their outdated descriptions were corrected. No fresh order or capture was created during this audit.
+
+The working source now checks provider order identity and status before reusing it; offers explicit owner-confirmed recovery for missing/terminal Sandbox orders; preserves the exact accepted version and amount; provides a vetted PayPal continuation link plus same-review return/cancel handling; and rejects mismatched, incomplete, or non-monotonic capture states. The existing same-version review link remains active while recovery returns an additional link. `pnpm check`, `pnpm test` (**53 tests across 6 files, including 30 mocked quote/change-order checkout route tests and the Sandbox URL allowlist test**), `pnpm build`, and `git diff --check` passed. The tests made no real provider calls or payment/database writes. The source release is validated; deployment must be confirmed separately. Full buyer approval/capture remains unverified.
+
 ## Not yet claimed
 
 A full PayPal sandbox buyer approval and completed capture has **not** yet been exercised in the browser. Server verification/retry helpers are covered by automated tests, but those tests do not replace the actual client-side sandbox walkthrough. Complete it using the sandbox **personal buyer** account, not the sandbox business merchant account.

@@ -48,7 +48,7 @@ For PayPal checkout, create a **Sandbox REST API app** in the PayPal Developer D
 - `PAYPAL_CLIENT_ID`
 - `PAYPAL_CLIENT_SECRET`
 
-Do not use Live credentials. Do not commit `.env` or secret values. If running outside the managed WebDev environment, provide the `PAYPAL_*` values in your local process environment using your own secret manager; never paste them into chat. The sandbox checkout remains unavailable until credentials are configured. AI drafting may also require an eligible Manus project AI runtime when running outside the managed WebDev environment.
+Do not use Live credentials. Do not commit `.env` or secret values. `SCOPEPAY_PUBLIC_ORIGIN` is an optional, non-secret exact HTTPS origin used for PayPal return/cancel URLs; it defaults to the current ScopePay host and must be updated if that hostname changes. If running outside the managed WebDev environment, provide the `PAYPAL_*` values in your local process environment using your own secret manager; never paste them into chat. In a fresh environment, Sandbox checkout remains unavailable until the credentials are configured; the current managed project pair has passed Sandbox OAuth. AI drafting may also require an eligible Manus project AI runtime when running outside the managed WebDev environment.
 
 Example variable names are listed in [`.env.example`](.env.example). They intentionally have no values.
 
@@ -61,9 +61,10 @@ The live hosted demo is [ScopePay on Manus](https://kindred-vj2hs3rd.manus.space
 3. In **Scope**, edit the proposed amount and terms if desired, then publish a review link. Open that link in a separate browser or private window to experience the client view.
 4. Review and explicitly accept the quoted version. Use the PayPal **sandbox buyer** account to approve checkout. ScopePay’s server verifies the resulting capture before showing a paid record.
 5. Back in the freelancer workspace, analyze a new request such as “Could we add a second mobile landing page for the launch campaign?” Inspect the cited scope evidence and advisory hours. Only then choose to create, price, review, and publish a change order.
-6. Use the fictional sample data for evaluation, or create a new project with fictional, non-sensitive details and review every AI-generated field.
+6. If PayPal's secure window is blocked, use the visible direct Sandbox continuation link. If the saved order is missing, the workspace owner can use Payments recovery only after checking Sandbox Activity; this creates no capture and keeps the accepted scope/version/amount unchanged.
+7. Use the fictional sample data for evaluation, or create a new project with fictional, non-sensitive details and review every AI-generated field.
 
-For a code-only evaluation, run `pnpm run check`, `pnpm test`, and `pnpm run build`. See [the under-three-minute demo script](docs/DEMO_SCRIPT.md) and [the proposed Devpost text](docs/HACKATHON_SUBMISSION.md). These materials describe the app; they do not claim a video upload, public deployment, or external credential setup that has not been completed.
+For a code-only evaluation, run `pnpm run check`, `pnpm test`, and `pnpm run build`. See [the under-three-minute demo script](docs/DEMO_SCRIPT.md) and [the proposed Devpost text](docs/HACKATHON_SUBMISSION.md). These materials do not claim a completed buyer-approved capture, public YouTube video, or Devpost submission until verified.
 
 ## Environment and privacy
 

@@ -15,6 +15,16 @@ let sessionToken: string | null = null;
 
 type ApiError = { error?: string; code?: string };
 
+export type CreateOrderResult = {
+  id: string;
+  approvalUrl: string | null;
+};
+
+export type ReissueOrderResult = {
+  project: ScopeProject;
+  approvalUrl: string | null;
+};
+
 export class ScopePayApiError extends Error {
   code?: string;
   status: number;
@@ -165,10 +175,19 @@ export const scopepayApi = {
       body: JSON.stringify({ version, accepted: true }),
     }),
   createOrder: (token: string, version: number) =>
-    request<{ id: string }>(`/client/${encodeURIComponent(token)}/orders`, {
+    request<CreateOrderResult>(`/client/${encodeURIComponent(token)}/orders`, {
       method: "POST",
       body: JSON.stringify({ version }),
     }),
+  reissueOrder: (projectId: string, documentId: string, version: number) =>
+    request<ReissueOrderResult>(
+      `/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}/orders/reissue`,
+      {
+        method: "POST",
+        body: JSON.stringify({ version, confirmedNoPayment: true }),
+      },
+      true
+    ),
   captureOrder: (token: string, orderId: string, traceId?: string) =>
     request<PaymentResult>(
       `/client/${encodeURIComponent(token)}/orders/${encodeURIComponent(orderId)}/capture`,

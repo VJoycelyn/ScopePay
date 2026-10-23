@@ -370,6 +370,7 @@ export function ShareLink({
   const [copied, setCopied] = useState(false);
   const [reissuing, setReissuing] = useState(false);
   const [error, setError] = useState("");
+  const [manualCopy, setManualCopy] = useState(false);
   const reissue = async () => {
     setReissuing(true);
     setError("");
@@ -403,10 +404,22 @@ export function ShareLink({
       {token ? (
         <button
           className="secondary-button"
-          onClick={() => {
-            navigator.clipboard?.writeText(link);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1800);
+          onClick={async () => {
+            setCopied(false);
+            setError("");
+            try {
+              if (!navigator.clipboard?.writeText)
+                throw new Error("unavailable");
+              await navigator.clipboard.writeText(link);
+              setCopied(true);
+              setManualCopy(false);
+              setTimeout(() => setCopied(false), 1800);
+            } catch {
+              setManualCopy(true);
+              setError(
+                "Clipboard access is blocked. Select the link below and copy it manually."
+              );
+            }
           }}
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
@@ -425,6 +438,17 @@ export function ShareLink({
           )}
           {reissuing ? "Creating…" : "Create fresh review link"}
         </button>
+      )}
+      {manualCopy && token && (
+        <label className="manual-share-copy">
+          <span className="micro-label">SELECT AND COPY REVIEW LINK</span>
+          <input
+            aria-label="Client review link for manual copy"
+            readOnly
+            value={link}
+            onFocus={event => event.currentTarget.select()}
+          />
+        </label>
       )}
       {error && (
         <div className="inline-message error">

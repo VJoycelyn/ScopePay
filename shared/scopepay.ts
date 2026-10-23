@@ -136,7 +136,8 @@ POST /api/scopepay/projects/:projectId/analyze body {request:string} -> {project
 POST /api/scopepay/projects/:projectId/changes body {analysisId:string} -> ScopeProject (stale/unbound analyses rejected; same analysisId is idempotent)
 GET /api/scopepay/client/:token -> ClientReview (published document only, no owner token, draft or audit data)
 POST /api/scopepay/client/:token/accept body {version:number,accepted:true} -> ClientReview
-POST /api/scopepay/client/:token/orders body {version:number} -> {id:string}
+POST /api/scopepay/client/:token/orders body {version:number} -> {id:string,approvalUrl:string|null}
+POST /api/scopepay/projects/:projectId/documents/:documentId/orders/reissue body {version:number,confirmedNoPayment:true} -> {project:ScopeProject,approvalUrl:string|null} (owner-only; provider-state checked; rotates the one-time client-review link and does not capture)
 POST /api/scopepay/client/:token/orders/:orderId/capture -> PaymentResult
 GET /api/scopepay/client/:token/orders/:orderId -> ClientReview (reconcile PayPal state, safe status recovery)
 Documents cannot be edited after acceptance/payment begins. Published edits revert to draft and revoke old client tokens.

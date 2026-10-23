@@ -44,9 +44,11 @@ import {
   capturePaypalOrder,
   completedCapture,
   createPaypalOrder,
+  extractApprovalUrl,
   getPaypalOrder,
   paypalClientId,
   paypalConfigured,
+  paypalOrderMatches,
   paypalPaymentStatus,
   recoveryStatus,
 } from "./paypal";
@@ -91,6 +93,11 @@ const acceptanceSchema = z.object({
   accepted: z.literal(true),
 });
 const orderSchema = z.object({ version: z.number().int().positive() });
+const recoverySchema = z.object({
+  version: z.number().int().positive(),
+  confirmedNoPayment: z.literal(true),
+});
+const DEFAULT_PUBLIC_ORIGIN = "https://kindred-vj2hs3rd.manus.space";
 
 function now(): string {
   return new Date().toISOString();
@@ -139,6 +146,51 @@ function safeProviderStatus(error: unknown): {
   code: string;
 } {
   const message = error instanceof Error ? error.message : "";
+  if (message === "CLIENT_TOKEN_NOT_FOUND")
+    return {
+      status: 404,
+      message: "Review link not found",
+      code: "CLIENT_LINK_NOT_FOUND",
+    };
+  if (message === "PAYPAL_ORDER_NOT_FOUND")
+    return {
+      status: 404,
+      message: "PayPal order not found",
+      code: "PAYPAL_ORDER_NOT_FOUND",
+    };
+  if (message === "ORDER_NOT_FOUND")
+    return { status: 404, message: "Order not found", code: "ORDER_NOT_FOUND" };
+  if (message === "ORDER_NOT_READY")
+    return {
+      status: 409,
+      message: "Order is still being created; retry shortly",
+      code: "ORDER_PENDING",
+    };
+  if (message === "PAYMENT_MISMATCH")
+    return {
+      status: 409,
+      message: "Payment verification did not match the stored order",
+      code: "PAYMENT_MISMATCH",
+    };
+  if (message === "PAYMENT_PENDING")
+    return {
+      status: 409,
+      message:
+        "Payment is pending verification; verify payment before retrying",
+      code: "PAYMENT_PENDING",
+    };
+  if (message === "PAYMENT_UNKNOWN")
+    return {
+      status: 503,
+      message: "Payment status is uncertain; verify payment before retrying",
+      code: "PAYMENT_UNKNOWN",
+    };
+  if (message === "PAYMENT_RETRY")
+    return {
+      status: 409,
+      message: "PayPal has no completed capture; retry the accepted order",
+      code: "PAYMENT_RETRY",
+    };
   if (message === "AI_NOT_CONFIGURED")
     return {
       status: 503,
@@ -174,6 +226,18 @@ function safeProviderStatus(error: unknown): {
     message: "Request could not be completed",
     code: "INTERNAL_ERROR",
   };
+}
+function publicOrigin(): string {
+  const configured = process.env.SCOPEPAY_PUBLIC_ORIGIN?.trim();
+  if (!configured) return DEFAULT_PUBLIC_ORIGIN;
+  try {
+    const url = new URL(configured);
+    if (url.protocol !== "https:" || url.username || url.password)
+      return DEFAULT_PUBLIC_ORIGIN;
+    return url.origin;
+  } catch {
+    return DEFAULT_PUBLIC_ORIGIN;
+  }
 }
 function sumPrices(deliverables: Deliverable[]): number {
   const total = deliverables.reduce((sum, item) => sum + item.priceCents, 0);
@@ -1199,6 +1263,264 @@ router.post("/client/:token/accept", async (req, res) => {
   }
 });
 
+router.post(
+  "/projects/:projectId/documents/:documentId/orders/reissue",
+  async (req, res) => {
+    const owner = requireOwner(req, res);
+    if (!owner) return;
+    const input = parsedBody(recoverySchema, req.body);
+    if (!input)
+      return sendError(
+        res,
+        400,
+        "Positive version and confirmedNoPayment are required",
+        "INVALID_INPUT"
+      );
+    if (!paypalConfigured())
+      return sendError(
+        res,
+        503,
+        "PayPal checkout is not configured",
+        "PAYPAL_NOT_CONFIGURED"
+      );
+    if (!rateLimit(req, "owner-order-reissue", 5))
+      return sendError(res, 429, "Too many recovery requests", "RATE_LIMITED");
+    try {
+      const row = await loadWorkspaceByTokenHash(owner.hash);
+      if (!row)
+        return sendError(
+          res,
+          401,
+          "Workspace token is invalid",
+          "WORKSPACE_TOKEN_INVALID"
+        );
+      const projectId = String(req.params.projectId);
+      const documentId = String(req.params.documentId);
+      const first = await withWorkspaceLock(
+        row.id,
+        async (connection, workspace) => {
+          const project = projectById(workspace, projectId);
+          const document = documentFromProject(project, documentId);
+          if (document.version !== input.version)
+            throw new Error("VERSION_MISMATCH");
+          if (
+            document.status !== "accepted" &&
+            document.status !== "payment_pending"
+          )
+            throw new Error("PAYMENT_PENDING");
+          if (document.paidAt || document.paypalCaptureId)
+            throw new Error("PAYMENT_PENDING");
+          const order = await findDocumentOrder(
+            connection,
+            row.id,
+            document.id,
+            document.version
+          );
+          if (!order) throw new Error("ORDER_NOT_FOUND");
+          if (
+            order.project_id !== project.id ||
+            order.document_id !== document.id ||
+            order.document_version !== document.version ||
+            order.currency !== "USD" ||
+            order.amount_cents !== document.totalCents ||
+            order.capture_id ||
+            order.status === "captured"
+          )
+            throw new Error("PAYMENT_MISMATCH");
+          if (order.status !== "created") throw new Error("PAYMENT_PENDING");
+          if (!order.paypal_order_id) throw new Error("ORDER_NOT_READY");
+          return {
+            value: {
+              projectId: project.id,
+              documentId: document.id,
+              version: document.version,
+              amountCents: document.totalCents,
+              paypalOrderId: order.paypal_order_id,
+              requestId: order.request_id,
+              status: order.status,
+            },
+            workspace,
+          };
+        }
+      );
+
+      if (first.paypalOrderId) {
+        let provider: Record<string, unknown>;
+        try {
+          provider = await getPaypalOrder(first.paypalOrderId);
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.message !== "PAYPAL_ORDER_NOT_FOUND"
+          )
+            throw error;
+          provider = {};
+        }
+        if (Object.keys(provider).length > 0) {
+          if (
+            !paypalOrderMatches(provider, {
+              amountCents: first.amountCents,
+              reference: `${first.projectId}:${first.documentId}:${first.version}`,
+              paypalOrderId: first.paypalOrderId,
+            })
+          )
+            throw new Error("PAYMENT_MISMATCH");
+          const state = paypalPaymentStatus(provider);
+          if (state === "COMPLETED") throw new Error("PAYMENT_PENDING");
+          if (
+            state === "PENDING" ||
+            state === "CREATED" ||
+            state === "APPROVED"
+          )
+            throw new Error("PAYMENT_PENDING");
+          if (state !== "VOIDED" && state !== "DENIED" && state !== "FAILED")
+            throw new Error("PAYMENT_UNKNOWN");
+        }
+      }
+
+      const requestId = newId();
+      const clientToken = newCapability();
+      const prepared = await withWorkspaceLock(
+        row.id,
+        async (connection, workspace) => {
+          const project = projectById(workspace, projectId);
+          const document = documentFromProject(project, documentId);
+          const order = await findDocumentOrder(
+            connection,
+            row.id,
+            documentId,
+            input.version
+          );
+          if (
+            document.version !== input.version ||
+            (document.status !== "accepted" &&
+              document.status !== "payment_pending") ||
+            document.paidAt ||
+            document.paypalCaptureId ||
+            !order ||
+            order.project_id !== projectId ||
+            order.document_id !== documentId ||
+            order.document_version !== input.version ||
+            order.amount_cents !== document.totalCents ||
+            document.totalCents !== first.amountCents ||
+            order.currency !== "USD" ||
+            order.capture_id ||
+            order.status !== "created" ||
+            order.request_id !== first.requestId ||
+            order.paypal_order_id !== first.paypalOrderId
+          )
+            throw new Error("RECOVERY_CHANGED");
+          await insertClientToken(
+            connection,
+            hashCapability(clientToken),
+            row.id,
+            projectId,
+            documentId,
+            input.version
+          );
+          await updateOrder(connection, order.id, {
+            status: "creating",
+            paypalOrderId: null,
+            requestId,
+          });
+          const nextProject = {
+            ...project,
+            audit: [
+              ...project.audit,
+              audit(
+                "sandbox_order_recovery_confirmed",
+                `Owner attested no Sandbox payment completed before recovery for ${document.kind} version ${input.version}; no capture was performed`
+              ),
+            ],
+          };
+          return {
+            value: { project: nextProject, orderId: order.id },
+            workspace: {
+              ...workspace,
+              projects: workspace.projects.map(item =>
+                item.id === project.id ? nextProject : item
+              ),
+            },
+          };
+        }
+      );
+      const created = await createPaypalOrder({
+        amountCents: first.amountCents,
+        localReference: `${projectId}:${documentId}:${input.version}`,
+        requestId,
+        returnUrl: `${publicOrigin()}/client/${clientToken}?paypal=return`,
+        cancelUrl: `${publicOrigin()}/client/${clientToken}?paypal=cancel`,
+      });
+      const saved = await withWorkspaceLock(
+        row.id,
+        async (connection, workspace) => {
+          const project = projectById(workspace, projectId);
+          const document = documentFromProject(project, documentId);
+          const order = await findDocumentOrder(
+            connection,
+            row.id,
+            documentId,
+            input.version
+          );
+          if (
+            !order ||
+            order.id !== prepared.orderId ||
+            order.status !== "creating" ||
+            order.request_id !== requestId ||
+            document.version !== input.version ||
+            document.totalCents !== first.amountCents
+          )
+            throw new Error("RECOVERY_CHANGED");
+          await updateOrder(connection, order.id, {
+            paypalOrderId: created.id,
+            status: "created",
+          });
+          const nextDocument = { ...document, paypalOrderId: created.id };
+          const nextProject = {
+            ...project,
+            quote:
+              project.quote.id === document.id ? nextDocument : project.quote,
+            changes: project.changes.map(item =>
+              item.id === document.id ? nextDocument : item
+            ),
+          };
+          return {
+            value: nextProject,
+            workspace: {
+              ...workspace,
+              projects: workspace.projects.map(item =>
+                item.id === project.id ? nextProject : item
+              ),
+            },
+          };
+        }
+      );
+      res.status(201).json({
+        project: ownerProject(saved, clientToken, documentId),
+        approvalUrl: created.approvalUrl,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message === "VERSION_MISMATCH")
+        return sendError(
+          res,
+          409,
+          "This document version is no longer current",
+          "VERSION_MISMATCH"
+        );
+      if (message === "RECOVERY_CHANGED")
+        return sendError(
+          res,
+          409,
+          "The order changed while recovery was running",
+          "ORDER_PENDING"
+        );
+      const result = safeProviderStatus(error);
+      sendError(res, result.status, result.message, result.code);
+    }
+  }
+);
+
 router.post("/client/:token/orders", async (req, res) => {
   const client = requireClient(req, res);
   if (!client) return;
@@ -1223,6 +1545,7 @@ router.post("/client/:token/orders", async (req, res) => {
     localId: string;
     paypalOrderId: string | null;
     requestId: string;
+    approvalUrl: string | null;
     amountCents: number;
     projectId: string;
     documentId: string;
@@ -1250,12 +1573,29 @@ router.post("/client/:token/orders", async (req, res) => {
           document.id,
           document.version
         );
-        if (existing)
+        if (existing) {
+          if (
+            existing.project_id !== project.id ||
+            existing.document_id !== document.id ||
+            existing.document_version !== document.version ||
+            existing.currency !== "USD" ||
+            existing.amount_cents !== document.totalCents
+          )
+            throw new Error("PAYMENT_MISMATCH");
+          if (existing.capture_id || existing.status === "captured")
+            throw new Error("PAYMENT_PENDING");
+          if (existing.status !== "creating" && existing.status !== "created")
+            throw new Error(
+              existing.status === "pending"
+                ? "PAYMENT_PENDING"
+                : "ORDER_NOT_READY"
+            );
           return {
             value: {
               localId: existing.id,
               paypalOrderId: existing.paypal_order_id,
               requestId: existing.request_id,
+              approvalUrl: null,
               amountCents: existing.amount_cents,
               projectId: existing.project_id,
               documentId: existing.document_id,
@@ -1263,6 +1603,7 @@ router.post("/client/:token/orders", async (req, res) => {
             },
             workspace,
           };
+        }
         const localId = newId();
         const requestId = newId();
         await connection.execute(
@@ -1292,6 +1633,7 @@ router.post("/client/:token/orders", async (req, res) => {
             localId,
             paypalOrderId: null,
             requestId,
+            approvalUrl: null,
             amountCents: document.totalCents,
             projectId: project.id,
             documentId: document.id,
@@ -1306,11 +1648,32 @@ router.post("/client/:token/orders", async (req, res) => {
         };
       }
     );
-    if (!order.paypalOrderId) {
-      const paypalId = await createPaypalOrder({
+    if (order.paypalOrderId) {
+      const savedPayload = await getPaypalOrder(order.paypalOrderId);
+      if (
+        !paypalOrderMatches(savedPayload, {
+          amountCents: order.amountCents,
+          reference: `${order.projectId}:${order.documentId}:${order.version}`,
+          paypalOrderId: order.paypalOrderId,
+        })
+      )
+        throw new Error("PAYMENT_MISMATCH");
+      const savedStatus = paypalPaymentStatus(savedPayload);
+      if (savedStatus !== "CREATED" && savedStatus !== "APPROVED")
+        throw new Error(
+          savedStatus === "PENDING" ? "PAYMENT_PENDING" : "ORDER_NOT_READY"
+        );
+      order.approvalUrl = extractApprovalUrl(savedPayload);
+    } else {
+      // A concurrent request may observe the creating lease. Reusing its
+      // persisted request_id is intentional: PayPal idempotency prevents two
+      // provider orders while the first request is uncertain.
+      const created = await createPaypalOrder({
         amountCents: order.amountCents,
         localReference: `${order.projectId}:${order.documentId}:${order.version}`,
         requestId: order.requestId,
+        returnUrl: `${publicOrigin()}/client/${client.token}?paypal=return`,
+        cancelUrl: `${publicOrigin()}/client/${client.token}?paypal=cancel`,
       });
       await withTokenLock(
         client.hash,
@@ -1323,18 +1686,23 @@ router.post("/client/:token/orders", async (req, res) => {
           if (
             !saved ||
             saved.project_id !== order.projectId ||
-            saved.document_id !== order.documentId
+            saved.document_id !== order.documentId ||
+            saved.document_version !== order.version ||
+            saved.amount_cents !== order.amountCents ||
+            saved.currency !== "USD"
           )
             throw new Error("ORDER_NOT_FOUND");
+          if (saved.paypal_order_id && saved.paypal_order_id !== created.id)
+            throw new Error("ORDER_NOT_READY");
           await updateOrder(connection, saved.id, {
-            paypalOrderId: paypalId,
+            paypalOrderId: created.id,
             status: "created",
           });
           const project = projectById(workspace, token.project_id);
           const document = documentFromProject(project, token.document_id);
           const nextDocument = {
             ...document,
-            paypalOrderId: document.paypalOrderId || paypalId,
+            paypalOrderId: created.id,
           };
           const nextProject = {
             ...project,
@@ -1355,9 +1723,13 @@ router.post("/client/:token/orders", async (req, res) => {
           };
         }
       );
-      order.paypalOrderId = paypalId;
+      order.paypalOrderId = created.id;
+      order.approvalUrl = created.approvalUrl;
     }
-    res.status(201).json({ id: order.paypalOrderId || order.localId });
+    res.status(201).json({
+      id: order.paypalOrderId || order.localId,
+      approvalUrl: order.approvalUrl,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message === "VERSION_MISMATCH")
@@ -1382,6 +1754,7 @@ router.post("/client/:token/orders", async (req, res) => {
 async function finalizeCapture(
   clientHash: string,
   orderId: string,
+  expectedPaypalOrderId: string,
   capture: { captureId: string }
 ): Promise<{
   status: "paid";
@@ -1401,6 +1774,8 @@ async function finalizeCapture(
         order.document_version !== token.document_version
       )
         throw new Error("ORDER_NOT_FOUND");
+      if (order.paypal_order_id !== expectedPaypalOrderId)
+        throw new Error("ORDER_SUPERSEDED");
       const project = projectById(workspace, token.project_id);
       const document = documentFromProject(project, token.document_id);
       if (
@@ -1409,22 +1784,24 @@ async function finalizeCapture(
         order.currency !== "USD"
       )
         throw new Error("PAYMENT_MISMATCH");
-      if (order.status === "captured" && order.capture_id)
+      if (order.status === "captured") {
+        if (!order.capture_id) throw new Error("PAYMENT_MISMATCH");
         return {
           value: {
             status: "paid",
-            orderId: order.paypal_order_id || order.id,
+            orderId: expectedPaypalOrderId,
             captureId: order.capture_id,
             amountCents: order.amount_cents,
             currency: "USD" as const,
           },
           workspace,
         };
+      }
       const paid = {
         ...document,
         status: "paid" as const,
         paidAt: document.paidAt || now(),
-        paypalOrderId: order.paypal_order_id || undefined,
+        paypalOrderId: expectedPaypalOrderId,
         paypalCaptureId: capture.captureId,
       };
       const nextProject = {
@@ -1448,7 +1825,7 @@ async function finalizeCapture(
       return {
         value: {
           status: "paid",
-          orderId: order.paypal_order_id || order.id,
+          orderId: expectedPaypalOrderId,
           captureId: capture.captureId,
           amountCents: order.amount_cents,
           currency: "USD" as const,
@@ -1464,9 +1841,14 @@ async function finalizeCapture(
   );
 }
 
-async function markPaymentPending(
+// Compare-and-set every payment transition against the exact provider order.
+// The capturing state blocks owner reissue while a provider request is in flight.
+async function transitionPaymentState(
   clientHash: string,
-  orderId: string
+  orderId: string,
+  expectedPaypalOrderId: string,
+  orderStatus: "pending" | "capturing",
+  allowCapturing = false
 ): Promise<void> {
   await withTokenLock(
     clientHash,
@@ -1475,11 +1857,30 @@ async function markPaymentPending(
       if (
         !order ||
         order.project_id !== token.project_id ||
-        order.document_id !== token.document_id
+        order.document_id !== token.document_id ||
+        order.document_version !== token.document_version
       )
         throw new Error("ORDER_NOT_FOUND");
+      if (order.paypal_order_id !== expectedPaypalOrderId)
+        throw new Error("ORDER_SUPERSEDED");
+      if (order.status === "capturing" && !allowCapturing) {
+        const ageMs = Date.now() - new Date(order.updated_at).getTime();
+        const recent = !Number.isFinite(ageMs) || ageMs < 120_000;
+        if (orderStatus !== "capturing" || recent)
+          throw new Error("CAPTURE_IN_PROGRESS");
+      }
+      if (order.status === "captured") {
+        if (!order.capture_id) throw new Error("PAYMENT_MISMATCH");
+        return { value: undefined, workspace };
+      }
       const project = projectById(workspace, token.project_id);
       const document = documentFromProject(project, token.document_id);
+      if (
+        document.version !== order.document_version ||
+        document.totalCents !== order.amount_cents ||
+        order.currency !== "USD"
+      )
+        throw new Error("PAYMENT_MISMATCH");
       const nextDocument =
         document.status === "accepted"
           ? { ...document, status: "payment_pending" as const }
@@ -1501,7 +1902,7 @@ async function markPaymentPending(
               ]
             : project.audit,
       };
-      await updateOrder(connection, order.id, { status: "pending" });
+      await updateOrder(connection, order.id, { status: orderStatus });
       return {
         value: undefined,
         workspace: {
@@ -1515,9 +1916,39 @@ async function markPaymentPending(
   );
 }
 
+async function markPaymentPending(
+  clientHash: string,
+  orderId: string,
+  expectedPaypalOrderId: string,
+  allowCapturing = false
+): Promise<void> {
+  return transitionPaymentState(
+    clientHash,
+    orderId,
+    expectedPaypalOrderId,
+    "pending",
+    allowCapturing
+  );
+}
+
+async function markPaymentCapturing(
+  clientHash: string,
+  orderId: string,
+  expectedPaypalOrderId: string
+): Promise<void> {
+  return transitionPaymentState(
+    clientHash,
+    orderId,
+    expectedPaypalOrderId,
+    "capturing"
+  );
+}
+
 async function resetPaymentAttempt(
   clientHash: string,
-  orderId: string
+  orderId: string,
+  expectedPaypalOrderId: string,
+  allowCapturing = false
 ): Promise<void> {
   await withTokenLock(
     clientHash,
@@ -1526,11 +1957,29 @@ async function resetPaymentAttempt(
       if (
         !order ||
         order.project_id !== token.project_id ||
-        order.document_id !== token.document_id
+        order.document_id !== token.document_id ||
+        order.document_version !== token.document_version
       )
         throw new Error("ORDER_NOT_FOUND");
+      if (order.paypal_order_id !== expectedPaypalOrderId)
+        throw new Error("ORDER_SUPERSEDED");
+      if (order.status === "capturing" && !allowCapturing) {
+        const ageMs = Date.now() - new Date(order.updated_at).getTime();
+        if (!Number.isFinite(ageMs) || ageMs < 120_000)
+          throw new Error("CAPTURE_IN_PROGRESS");
+      }
+      if (order.status === "captured") {
+        if (!order.capture_id) throw new Error("PAYMENT_MISMATCH");
+        return { value: undefined, workspace };
+      }
       const project = projectById(workspace, token.project_id);
       const document = documentFromProject(project, token.document_id);
+      if (
+        document.version !== order.document_version ||
+        document.totalCents !== order.amount_cents ||
+        order.currency !== "USD"
+      )
+        throw new Error("PAYMENT_MISMATCH");
       const nextDocument =
         document.status === "payment_pending"
           ? { ...document, status: "accepted" as const }
@@ -1545,7 +1994,7 @@ async function resetPaymentAttempt(
           ...project.audit,
           audit(
             "payment_retryable",
-            "PayPal reported no completed or pending capture; the accepted order can be retried"
+            "PayPal has no completed or pending capture; the accepted order can be retried"
           ),
         ],
       };
@@ -1582,8 +2031,8 @@ function paymentStatusError(status: ReturnType<typeof paypalPaymentStatus>): {
   if (status === "APPROVED")
     return {
       message:
-        "Payment approval was received but capture needs another attempt",
-      code: "PAYMENT_RETRY",
+        "Payment approval was received but capture status is uncertain; verify payment before retrying",
+      code: "PAYMENT_UNKNOWN",
     };
   if (status === "CREATED")
     return {
@@ -1629,6 +2078,7 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
     captureId?: string;
     alreadyCaptured?: boolean;
   } | null = null;
+  let captureClaimed = false;
   try {
     trace.info("capture.order_lookup");
     pending = await withTokenLock(
@@ -1642,9 +2092,11 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
         if (
           !order ||
           order.project_id !== token.project_id ||
-          order.document_id !== token.document_id
+          order.document_id !== token.document_id ||
+          order.document_version !== token.document_version
         )
           throw new Error("ORDER_NOT_FOUND");
+        if (order.currency !== "USD") throw new Error("PAYMENT_MISMATCH");
         trace.info("capture.order_loaded", {
           version: order.document_version,
           amountCents: order.amount_cents,
@@ -1668,6 +2120,11 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
         if (!order.paypal_order_id) throw new Error("ORDER_NOT_READY");
         const project = projectById(workspace, token.project_id);
         const document = documentFromProject(project, token.document_id);
+        if (
+          document.version !== order.document_version ||
+          document.totalCents !== order.amount_cents
+        )
+          throw new Error("PAYMENT_MISMATCH");
         if (
           document.status !== "accepted" &&
           document.status !== "payment_pending"
@@ -1701,6 +2158,14 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
     // safe and avoids issuing a second capture after an uncertain timeout.
     trace.info("capture.provider_lookup");
     const before = await getPaypalOrder(pending.paypalOrderId);
+    if (
+      !paypalOrderMatches(before, {
+        paypalOrderId: pending.paypalOrderId,
+        amountCents: pending.amountCents,
+        reference: pending.reference,
+      })
+    )
+      throw new Error("PAYMENT_MISMATCH");
     const beforeStatus = recoveryStatus(before);
     trace.info("capture.provider_before", {
       providerStatus: paypalPaymentStatus(before),
@@ -1714,10 +2179,18 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
       });
       if (!completed) throw new Error("PAYMENT_MISMATCH");
       trace.info("capture.before_verified", { captureVerified: true });
+      await markPaymentCapturing(
+        client.hash,
+        pending.localId,
+        pending.paypalOrderId
+      );
+      captureClaimed = true;
+      trace.info("capture.mark_inflight");
       trace.info("capture.finalize_start");
       const result = await finalizeCapture(
         client.hash,
         pending.localId,
+        pending.paypalOrderId,
         completed
       );
       trace.info("capture.finalize_complete", { captureVerified: true });
@@ -1725,7 +2198,12 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
     }
     if (beforeStatus === "pending") {
       trace.warn("capture.provider_pending", { providerStatus: "PENDING" });
-      await markPaymentPending(client.hash, pending.localId);
+      await markPaymentPending(
+        client.hash,
+        pending.localId,
+        pending.paypalOrderId,
+        captureClaimed
+      );
       const result = paymentStatusError(paypalPaymentStatus(before));
       return sendError(res, 409, result.message, result.code);
     }
@@ -1733,7 +2211,12 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
       trace.warn("capture.provider_retryable", {
         providerStatus: paypalPaymentStatus(before),
       });
-      await resetPaymentAttempt(client.hash, pending.localId);
+      await resetPaymentAttempt(
+        client.hash,
+        pending.localId,
+        pending.paypalOrderId,
+        captureClaimed
+      );
       const result = paymentStatusError(paypalPaymentStatus(before));
       return sendError(res, 409, result.message, result.code);
     }
@@ -1741,17 +2224,33 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
       trace.warn("capture.approval_required", {
         providerStatus: paypalPaymentStatus(before),
       });
+      if (paypalPaymentStatus(before) === "CREATED")
+        await resetPaymentAttempt(
+          client.hash,
+          pending.localId,
+          pending.paypalOrderId,
+          captureClaimed
+        );
+      else
+        await markPaymentPending(
+          client.hash,
+          pending.localId,
+          pending.paypalOrderId,
+          captureClaimed
+        );
       const result = paymentStatusError(paypalPaymentStatus(before));
       return sendError(res, 409, result.message, result.code);
     }
 
-    trace.info("capture.mark_pending");
-    await markPaymentPending(client.hash, pending.localId);
-    trace.info("capture.provider_request");
-    const payload = await capturePaypalOrder(
-      pending.paypalOrderId,
-      pending.localId
+    await markPaymentCapturing(
+      client.hash,
+      pending.localId,
+      pending.paypalOrderId
     );
+    captureClaimed = true;
+    trace.info("capture.mark_inflight");
+    trace.info("capture.provider_request");
+    const payload = await capturePaypalOrder(pending.paypalOrderId);
     const completed = completedCapture(payload, {
       amountCents: pending.amountCents,
       reference: pending.reference,
@@ -1766,6 +2265,7 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
       const result = await finalizeCapture(
         client.hash,
         pending.localId,
+        pending.paypalOrderId,
         completed
       );
       trace.info("capture.finalize_complete", { captureVerified: true });
@@ -1774,12 +2274,37 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
     trace.warn("capture.verify_failed", { captureVerified: false });
     const result = paymentStatusError(paypalPaymentStatus(payload));
     if (result.code === "PAYMENT_RETRY")
-      await resetPaymentAttempt(client.hash, pending.localId);
-    else await markPaymentPending(client.hash, pending.localId);
+      await resetPaymentAttempt(
+        client.hash,
+        pending.localId,
+        pending.paypalOrderId,
+        captureClaimed
+      );
+    else
+      await markPaymentPending(
+        client.hash,
+        pending.localId,
+        pending.paypalOrderId,
+        captureClaimed
+      );
     return sendError(res, 409, result.message, result.code);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     trace.error("capture.failed", { errorCode: safePaymentErrorCode(error) });
+    if (message === "ORDER_SUPERSEDED")
+      return sendError(
+        res,
+        409,
+        "The Sandbox order changed during checkout. Refresh the same review and verify PayPal Activity before taking another payment action.",
+        "ORDER_SUPERSEDED"
+      );
+    if (message === "CAPTURE_IN_PROGRESS")
+      return sendError(
+        res,
+        409,
+        "A PayPal capture is still being processed. Wait briefly and retry the same order; do not create another.",
+        "ORDER_PENDING"
+      );
     if (message === "ORDER_NOT_FOUND")
       return sendError(res, 404, "Order not found", "ORDER_NOT_FOUND");
     if (message === "ORDER_NOT_READY")
@@ -1803,6 +2328,25 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
         "Payment verification did not match the stored order",
         "PAYMENT_MISMATCH"
       );
+    if (message === "PAYPAL_ORDER_NOT_FOUND") {
+      try {
+        if (pending)
+          await markPaymentPending(
+            client.hash,
+            pending.localId,
+            pending.paypalOrderId,
+            captureClaimed
+          );
+      } catch {
+        /* Preserve the safe missing-order response if state preservation fails. */
+      }
+      return sendError(
+        res,
+        404,
+        "PayPal order not found",
+        "PAYPAL_ORDER_NOT_FOUND"
+      );
+    }
     if (pending) {
       // A timeout or provider rejection is not proof of failure. Reconcile
       // first; only a conclusive no-capture state resets the accepted order.
@@ -1827,10 +2371,20 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
               "Payment verification did not match the stored order",
               "PAYMENT_MISMATCH"
             );
+          if (!captureClaimed) {
+            await markPaymentCapturing(
+              client.hash,
+              pending.localId,
+              pending.paypalOrderId
+            );
+            captureClaimed = true;
+            trace.info("capture.mark_inflight");
+          }
           trace.info("capture.finalize_start");
           const result = await finalizeCapture(
             client.hash,
             pending.localId,
+            pending.paypalOrderId,
             completed
           );
           trace.info("capture.finalize_complete", { captureVerified: true });
@@ -1840,7 +2394,12 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
           status === "retryable" ||
           paypalPaymentStatus(reconciled) === "CREATED"
         ) {
-          await resetPaymentAttempt(client.hash, pending.localId);
+          await resetPaymentAttempt(
+            client.hash,
+            pending.localId,
+            pending.paypalOrderId,
+            captureClaimed
+          );
           return sendError(
             res,
             409,
@@ -1848,7 +2407,12 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
             "PAYMENT_RETRY"
           );
         }
-        await markPaymentPending(client.hash, pending.localId);
+        await markPaymentPending(
+          client.hash,
+          pending.localId,
+          pending.paypalOrderId,
+          captureClaimed
+        );
         return sendError(
           res,
           503,
@@ -1860,7 +2424,12 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
           errorCode: safePaymentErrorCode(reconcileError),
         });
         try {
-          await markPaymentPending(client.hash, pending.localId);
+          await markPaymentPending(
+            client.hash,
+            pending.localId,
+            pending.paypalOrderId,
+            captureClaimed
+          );
         } catch (pendingError) {
           trace.error("capture.preserve_pending_failed", {
             errorCode: safePaymentErrorCode(pendingError),
@@ -1909,9 +2478,27 @@ router.get("/client/:token/orders/:orderId", async (req, res) => {
     if (
       !order ||
       order.project_id !== context.project.id ||
-      order.document_id !== context.document.id
+      order.document_id !== context.document.id ||
+      order.document_version !== context.document.version
     )
       return sendError(res, 404, "Order not found", "ORDER_NOT_FOUND");
+    if (
+      order.amount_cents !== context.document.totalCents ||
+      order.currency !== "USD"
+    )
+      return sendError(
+        res,
+        409,
+        "Order does not match this accepted scope",
+        "PAYMENT_MISMATCH"
+      );
+    if (order.status === "capturing")
+      return sendError(
+        res,
+        409,
+        "A PayPal capture is still being processed. Retry this same order shortly; do not create another.",
+        "ORDER_PENDING"
+      );
     if (
       order.status !== "captured" &&
       order.paypal_order_id &&
@@ -1926,21 +2513,47 @@ router.get("/client/:token/orders/:orderId", async (req, res) => {
         };
         const completed = completedCapture(payload, expected);
         if (completed) {
-          await finalizeCapture(client.hash, order.id, completed);
+          await markPaymentCapturing(
+            client.hash,
+            order.id,
+            order.paypal_order_id
+          );
+          await finalizeCapture(
+            client.hash,
+            order.id,
+            order.paypal_order_id,
+            completed
+          );
           const fresh = await loadPublicContext(client.hash);
           if (fresh)
             return res.json(publicReview(fresh.project, fresh.document));
         }
+        if (!paypalOrderMatches(payload, expected))
+          return sendError(
+            res,
+            409,
+            "PayPal order does not match the accepted scope",
+            "PAYMENT_MISMATCH"
+          );
         const status = recoveryStatus(payload);
         if (status === "pending")
-          await markPaymentPending(client.hash, order.id);
+          await markPaymentPending(
+            client.hash,
+            order.id,
+            order.paypal_order_id
+          );
         else if (
           status === "retryable" ||
           paypalPaymentStatus(payload) === "CREATED"
         )
-          await resetPaymentAttempt(client.hash, order.id);
-      } catch {
-        /* Reconcile is safe to retry; do not expose provider details. */
+          await resetPaymentAttempt(
+            client.hash,
+            order.id,
+            order.paypal_order_id
+          );
+      } catch (error) {
+        const result = safeProviderStatus(error);
+        return sendError(res, result.status, result.message, result.code);
       }
     }
     const fresh = await loadPublicContext(client.hash);

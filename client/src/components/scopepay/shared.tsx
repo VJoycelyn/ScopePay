@@ -27,12 +27,40 @@ export const formatTime = (value?: string) =>
         minute: "2-digit",
       }).format(new Date(value))
     : "—";
-export const errorMessage = (error: unknown) =>
-  error instanceof ScopePayApiError
+const SAFE_SCOPEPAY_ERROR_MESSAGES: Record<string, string> = {
+  PAYPAL_ORDER_NOT_FOUND:
+    "This PayPal Sandbox order is unavailable. Ask the workspace owner to check Sandbox Activity and confirm no payment completed, then use Payments recovery. The accepted version and existing review link stay available; the owner will also receive a fresh continuation link.",
+  CAPTURE_IN_PROGRESS:
+    "A PayPal capture is still being processed. Wait briefly, then retry verification for this same order; do not create a replacement.",
+  ORDER_SUPERSEDED:
+    "The saved PayPal order changed during checkout. Refresh this same review and verify Sandbox Activity before continuing.",
+  ORDER_NOT_FOUND:
+    "This PayPal Sandbox order is unavailable. Ask the workspace owner to check Sandbox Activity and confirm no payment completed, then use Payments recovery. The accepted version and existing review link stay available; the owner will also receive a fresh continuation link.",
+  ORDER_PENDING:
+    "PayPal still shows this order as pending. No payment was recorded; do not create a replacement until the server says it is safe.",
+  PAYMENT_MISMATCH:
+    "PayPal could not verify this order for the accepted version and amount. No payment was recorded.",
+  PAYMENT_UNKNOWN:
+    "PayPal's payment status could not be verified. No payment was recorded; try again only when the server says it is safe.",
+  PAYPAL_PROVIDER_REJECTED:
+    "PayPal Sandbox rejected this payment request. No payment was recorded.",
+  VERSION_MISMATCH:
+    "This payment link is for a different document version. No payment was recorded.",
+};
+
+export const errorMessage = (error: unknown) => {
+  if (error instanceof ScopePayApiError) {
+    return (
+      (error.code && SAFE_SCOPEPAY_ERROR_MESSAGES[error.code]) ||
+      (error.code === "INTERNAL_ERROR" || error.code === "UNKNOWN_ERROR"
+        ? "The payment service could not complete that request. Try again later."
+        : error.message)
+    );
+  }
+  return error instanceof Error
     ? error.message
-    : error instanceof Error
-      ? error.message
-      : "Something went wrong. Try again.";
+    : "Something went wrong. Try again.";
+};
 
 export function Logo({ light = false }: { light?: boolean }) {
   return (

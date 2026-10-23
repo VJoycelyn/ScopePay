@@ -5,6 +5,8 @@ const TRACE_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ERROR_CODES = new Set([
   "ORDER_NOT_FOUND",
+  "ORDER_SUPERSEDED",
+  "CAPTURE_IN_PROGRESS",
   "ORDER_NOT_READY",
   "ORDER_PENDING",
   "ACCEPTANCE_REQUIRED",
@@ -13,6 +15,7 @@ const ERROR_CODES = new Set([
   "PAYMENT_UNKNOWN",
   "PAYMENT_RETRY",
   "PAYPAL_NOT_CONFIGURED",
+  "PAYPAL_ORDER_NOT_FOUND",
   "PAYPAL_PROVIDER_REJECTED",
   "PAYPAL_UNAVAILABLE",
   "RATE_LIMITED",
@@ -56,6 +59,7 @@ export type PaymentTraceStage =
   | "capture.provider_lookup"
   | "capture.provider_before"
   | "capture.before_verified"
+  | "capture.mark_inflight"
   | "capture.provider_pending"
   | "capture.provider_retryable"
   | "capture.approval_required"

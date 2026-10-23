@@ -34,10 +34,16 @@ async function paypalFetch(
       string,
       unknown
     >;
+    if (response.status === 404 && payload.name === "INVALID_RESOURCE_ID")
+      throw new Error("PAYPAL_ORDER_NOT_FOUND");
     if (!response.ok) throw new Error("PAYPAL_PROVIDER_REJECTED");
     return payload;
   } catch (error) {
-    if (error instanceof Error && error.message === "PAYPAL_PROVIDER_REJECTED")
+    if (
+      error instanceof Error &&
+      (error.message === "PAYPAL_PROVIDER_REJECTED" ||
+        error.message === "PAYPAL_ORDER_NOT_FOUND")
+    )
       throw error;
     throw new Error("PAYPAL_UNAVAILABLE");
   } finally {
@@ -72,7 +78,11 @@ async function accessToken(): Promise<string> {
       throw new Error("PAYPAL_PROVIDER_REJECTED");
     return token;
   } catch (error) {
-    if (error instanceof Error && error.message === "PAYPAL_PROVIDER_REJECTED")
+    if (
+      error instanceof Error &&
+      (error.message === "PAYPAL_PROVIDER_REJECTED" ||
+        error.message === "PAYPAL_ORDER_NOT_FOUND")
+    )
       throw error;
     throw new Error("PAYPAL_UNAVAILABLE");
   } finally {
@@ -95,7 +105,9 @@ export async function createPaypalOrder(args: {
   amountCents: number;
   localReference: string;
   requestId: string;
-}): Promise<string> {
+  returnUrl: string;
+  cancelUrl: string;
+}): Promise<{ id: string; approvalUrl: string | null }> {
   const token = await accessToken();
   const body = await paypalFetch("/v2/checkout/orders", {
     method: "POST",
@@ -112,28 +124,60 @@ export async function createPaypalOrder(args: {
           },
         },
       ],
-      application_context: {
-        user_action: "PAY_NOW",
-        shipping_preference: "NO_SHIPPING",
+      payment_source: {
+        paypal: {
+          experience_context: {
+            user_action: "PAY_NOW",
+            shipping_preference: "NO_SHIPPING",
+            return_url: args.returnUrl,
+            cancel_url: args.cancelUrl,
+          },
+        },
       },
     }),
   });
   if (typeof body.id !== "string" || !body.id)
     throw new Error("PAYPAL_PROVIDER_REJECTED");
-  return body.id;
+  return { id: body.id, approvalUrl: extractApprovalUrl(body) };
 }
 
-export function captureRequestId(localOrderId: string): string {
+/** Only hand the browser a PayPal Sandbox approval URL from the provider. */
+export function extractApprovalUrl(
+  payload: Record<string, unknown>
+): string | null {
+  const links = Array.isArray(payload.links)
+    ? (payload.links as Array<Record<string, unknown>>)
+    : [];
+  for (const link of links) {
+    const href = typeof link.href === "string" ? link.href : "";
+    const rel = typeof link.rel === "string" ? link.rel : "";
+    if (rel !== "approve" && rel !== "payer-action") continue;
+    try {
+      const url = new URL(href);
+      if (
+        url.protocol === "https:" &&
+        url.hostname === "www.sandbox.paypal.com" &&
+        !url.username &&
+        !url.password
+      )
+        return url.toString();
+    } catch {
+      /* Ignore malformed or non-allowlisted provider links. */
+    }
+  }
+  return null;
+}
+
+export function captureRequestId(paypalOrderId: string): string {
   return crypto
     .createHash("sha256")
-    .update(`scopepay:capture:${localOrderId}`, "utf8")
+    .update(`scopepay:capture:${paypalOrderId}`, "utf8")
     .digest("hex")
     .slice(0, 38);
 }
 
 export async function capturePaypalOrder(
-  paypalOrderId: string,
-  localOrderId: string
+  paypalOrderId: string
 ): Promise<Record<string, unknown>> {
   const token = await accessToken();
   return paypalFetch(
@@ -141,7 +185,7 @@ export async function capturePaypalOrder(
     {
       method: "POST",
       headers: {
-        ...authHeaders(token, captureRequestId(localOrderId)),
+        ...authHeaders(token, captureRequestId(paypalOrderId)),
         prefer: "return=representation",
       },
       body: "{}",
@@ -160,6 +204,33 @@ export async function getPaypalOrder(
       headers: { authorization: `Bearer ${token}`, accept: "application/json" },
     }
   );
+}
+
+export function paypalOrderMatches(
+  payload: Record<string, unknown>,
+  expected: { amountCents: number; reference: string; paypalOrderId: string }
+): boolean {
+  if (typeof payload.id !== "string" || !payload.id) return false;
+  if (payload.id !== expected.paypalOrderId) return false;
+  const units = Array.isArray(payload.purchase_units)
+    ? (payload.purchase_units as Array<Record<string, unknown>>)
+    : [];
+  if (units.length !== 1) return false;
+  return units.some(unit => {
+    const references = [unit.reference_id, unit.custom_id].filter(
+      value => value !== undefined && value !== null
+    );
+    if (
+      references.length === 0 ||
+      references.some(reference => reference !== expected.reference)
+    )
+      return false;
+    const amount = unit.amount as Record<string, unknown> | undefined;
+    return (
+      amount?.currency_code === "USD" &&
+      amountCents(amount.value) === expected.amountCents
+    );
+  });
 }
 
 export type PaypalPaymentStatus =
@@ -238,31 +309,48 @@ export function completedCapture(
 ): { captureId: string } | null {
   if (
     expected.paypalOrderId &&
-    typeof payload.id === "string" &&
-    payload.id !== expected.paypalOrderId
+    (typeof payload.id !== "string" ||
+      !payload.id ||
+      payload.id !== expected.paypalOrderId)
   )
     return null;
   if (normalizedStatus(payload.status) !== "COMPLETED") return null;
   const units = Array.isArray(payload.purchase_units)
     ? (payload.purchase_units as Array<Record<string, unknown>>)
     : [];
-  const matchingUnit = units.find(
-    unit =>
-      unit.reference_id === expected.reference ||
-      unit.custom_id === expected.reference
+  if (units.length !== 1) return null;
+  const matchingUnit = units[0];
+  const references = [matchingUnit.reference_id, matchingUnit.custom_id].filter(
+    value => value !== undefined && value !== null
   );
-  if (!matchingUnit) return null;
+  if (
+    !references.length ||
+    references.some(value => value !== expected.reference)
+  )
+    return null;
+  // Orders GET supplies the unit total and is validated before capture.
+  // Capture POST can omit that total; if supplied it must also match.
+  if (matchingUnit.amount !== undefined) {
+    const unitAmount = matchingUnit.amount as Record<string, unknown> | null;
+    if (
+      unitAmount?.currency_code !== "USD" ||
+      amountCents(unitAmount?.value) !== expected.amountCents
+    )
+      return null;
+  }
   const payments = matchingUnit.payments as Record<string, unknown> | undefined;
   const captures = Array.isArray(payments?.captures)
     ? (payments.captures as Array<Record<string, unknown>>)
     : [];
   const capture = captures.find(item => item.status === "COMPLETED");
   if (!capture || typeof capture.id !== "string") return null;
+  const captureId = capture.id.trim();
+  if (!captureId || captureId !== capture.id) return null;
   const amount = capture.amount as Record<string, unknown> | undefined;
   if (amount?.currency_code !== "USD") return null;
   const cents = amountCents(amount?.value);
   if (cents === null || cents !== expected.amountCents) return null;
-  return { captureId: capture.id };
+  return { captureId };
 }
 
 export function recoveryStatus(

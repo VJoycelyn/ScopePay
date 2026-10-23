@@ -288,7 +288,11 @@ export function WorkspacePage() {
           )}
         </div>
       ) : section === "payments" ? (
-        <PaymentsPanel project={project} onReload={load} />
+        <PaymentsPanel
+          project={project}
+          onReload={load}
+          onProject={updateProject}
+        />
       ) : (
         <section className="panel activity-panel">
           <div className="panel-heading">

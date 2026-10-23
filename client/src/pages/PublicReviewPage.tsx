@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   ClipboardCheck,
@@ -7,7 +7,11 @@ import {
   ShieldCheck,
   XCircle,
 } from "lucide-react";
-import type { ClientReview, ServiceStatus } from "@shared/scopepay";
+import type {
+  ClientReview,
+  PaymentResult,
+  ServiceStatus,
+} from "@shared/scopepay";
 import { scopepayApi } from "../lib/scopepay-api";
 import { PayPalCheckout } from "../components/scopepay/PayPalCheckout";
 import {
@@ -24,6 +28,9 @@ export function PublicReviewPage({ token }: { token: string }) {
   const [accepting, setAccepting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [paypalNotice, setPaypalNotice] = useState("");
+  const [paypalNoticeError, setPaypalNoticeError] = useState(false);
+  const handledPaypalQuery = useRef("");
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -48,6 +55,69 @@ export function PublicReviewPage({ token }: { token: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    if (!review) return;
+    const query = new URL(window.location.href);
+    const paypalAction = query.searchParams.get("paypal");
+    if (paypalAction !== "return" && paypalAction !== "cancel") return;
+    const providerOrderId = query.searchParams.get("token");
+    const queryKey = `${paypalAction}:${providerOrderId ?? ""}:${review.document.id}:${review.document.version}`;
+    if (handledPaypalQuery.current === queryKey) return;
+    handledPaypalQuery.current = queryKey;
+    for (const key of ["paypal", "token", "PayerID", "payerId", "paymentId"])
+      query.searchParams.delete(key);
+    window.history.replaceState(
+      {},
+      window.document.title,
+      `${query.pathname}${query.search}${query.hash}`
+    );
+    if (paypalAction === "cancel") {
+      setPaypalNotice(
+        "No capture was recorded. The same PayPal order remains available if you want to try again."
+      );
+      setPaypalNoticeError(false);
+      return;
+    }
+    if (
+      (review.document.status !== "accepted" &&
+        review.document.status !== "payment_pending") ||
+      !providerOrderId ||
+      providerOrderId !== review.document.paypalOrderId
+    ) {
+      setPaypalNotice(
+        "This PayPal return could not be matched to the saved order for this accepted review. No payment was recorded."
+      );
+      setPaypalNoticeError(true);
+      return;
+    }
+    setPaypalNotice(
+      "Verifying the completed PayPal Sandbox order with the server…"
+    );
+    setPaypalNoticeError(false);
+    void scopepayApi
+      .captureOrder(token, providerOrderId)
+      .then((result: PaymentResult) => {
+        setReview(current =>
+          current
+            ? {
+                ...current,
+                document: {
+                  ...current.document,
+                  status: "paid",
+                  paidAt: current.document.paidAt || new Date().toISOString(),
+                  paypalOrderId: result.orderId,
+                  paypalCaptureId: result.captureId,
+                },
+              }
+            : current
+        );
+        setPaypalNotice("");
+      })
+      .catch(err => {
+        setPaypalNotice(errorMessage(err));
+        setPaypalNoticeError(true);
+      });
+  }, [review, token]);
   const accept = async () => {
     if (!review || !accepted) return;
     setAccepting(true);
@@ -163,6 +233,14 @@ export function PublicReviewPage({ token }: { token: string }) {
               <strong>{formatMoneyExact(document.totalCents)}</strong>
               <small>Server-calculated · Version {document.version}</small>
             </div>
+            {paypalNotice && (
+              <div
+                className={`inline-message${paypalNoticeError ? " error" : ""}`}
+              >
+                {paypalNoticeError ? <XCircle size={14} /> : <Info size={14} />}
+                <span>{paypalNotice}</span>
+              </div>
+            )}
             {document.status === "published" ? (
               <>
                 <label className="accept-check">

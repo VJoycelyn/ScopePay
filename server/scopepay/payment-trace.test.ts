@@ -65,6 +65,12 @@ describe("privacy-safe PayPal capture tracing", () => {
     expect(safePaymentErrorCode(new Error("PAYPAL_UNAVAILABLE"))).toBe(
       "PAYPAL_UNAVAILABLE"
     );
+    expect(safePaymentErrorCode(new Error("CAPTURE_IN_PROGRESS"))).toBe(
+      "CAPTURE_IN_PROGRESS"
+    );
+    expect(safePaymentErrorCode(new Error("ORDER_SUPERSEDED"))).toBe(
+      "ORDER_SUPERSEDED"
+    );
     expect(
       safePaymentTraceDetails({
         providerStatus: "private-payer",
