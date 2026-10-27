@@ -31,3 +31,9 @@ TypeScript (`pnpm check`), all **132 mocked tests across 13 files**, the product
 No live acceptance, order creation, reissue, approval, capture, or capability rotation was initiated. Live end-to-end retesting is still blocked on the owner supplying a valid current review link. Deployment success and the live UI check will be reported separately from these mocked test results.
 
 A final read-only integration review found no blocking issues in initial/late unavailable-link gating, retained handlers, verified-paid preservation, temporary-service retry, or backend 404/503 classification. The reviewer made no live API or PayPal calls and changed no files. The current revoked link remains unavailable by design; this repair is not permission to resurrect it.
+
+## Published result and live UI check
+
+The repair was published successfully as checkpoint `35242fc2fc4aa38257866cd704594c93e42741ae` at [scopepay.manus.space](https://scopepay.manus.space). A plain page reload of the supplied, revoked review capability now displays the specific `CLIENT_LINK_NOT_FOUND` message: the saved PayPal order could not be checked, the owner must provide a current link, and this does not prove that no payment completed. No PayPal buttons, order preparation, or verification controls are shown for that link.
+
+This live check verifies the invalid-link safety/UI path only. It does **not** retest PayPal availability for the saved order, and it does not determine whether a prior provider payment completed. The owner must supply a valid current client-review link for the same accepted document before the same-order GET can be tested again. No transaction action occurred during the live UI check.
