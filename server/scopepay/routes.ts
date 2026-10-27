@@ -97,7 +97,7 @@ const recoverySchema = z.object({
   version: z.number().int().positive(),
   confirmedNoPayment: z.literal(true),
 });
-const DEFAULT_PUBLIC_ORIGIN = "https://kindred-vj2hs3rd.manus.space";
+const DEFAULT_PUBLIC_ORIGIN = "https://scopepay.manus.space";
 
 function now(): string {
   return new Date().toISOString();

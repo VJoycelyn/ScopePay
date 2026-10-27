@@ -54,9 +54,9 @@ Example variable names are listed in [`.env.example`](.env.example). They intent
 
 ## Judge quick start
 
-The live hosted demo is [ScopePay on Manus](https://kindred-vj2hs3rd.manus.space). The current hostname was assigned by the hosting platform; if a ScopePay vanity subdomain becomes available, replace this link with the verified address. The application uses a managed database and private AI runtime, so cloning/building the public source by itself is not a turnkey judge environment. Verify the hosted app and its testing access in a fresh browser before submission. See [the step-by-step ScopePay completion guide](docs/ScopePay-Completion-Guide.md) for the exact sandbox walkthrough and remaining requirements.
+The live hosted demo is [ScopePay on Manus](https://scopepay.manus.space); this is the verified ScopePay-branded hostname. The application uses a managed database and private AI runtime, so cloning/building the public source by itself is not a turnkey judge environment. Verify the hosted app and its testing access in a fresh browser before submission. See [the step-by-step ScopePay completion guide](docs/ScopePay-Completion-Guide.md) for the exact Sandbox walkthrough and remaining requirements.
 
-1. Open the [live hosted demo](https://kindred-vj2hs3rd.manus.space).
+1. Open the [live hosted demo](https://scopepay.manus.space).
 2. Select **Load sample project** to see a clearly fictional example; it creates no fake client acceptance or payment.
 3. In **Scope**, edit the proposed amount and terms if desired, then publish a review link. Open that link in a separate browser or private window to experience the client view.
 4. Review and explicitly accept the quoted version. Use the PayPal **sandbox buyer** account to approve checkout. ScopePay’s server verifies the resulting capture before showing a paid record.

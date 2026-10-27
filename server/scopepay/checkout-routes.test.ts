@@ -450,6 +450,11 @@ describe("ScopePay accepted-version checkout routes", () => {
       const returnUrl = new URL(mocks.state.createCalls[0].returnUrl);
       const cancelUrl = new URL(mocks.state.createCalls[0].cancelUrl);
       expect(returnUrl.protocol).toBe("https:");
+      expect(returnUrl.origin).toBe(
+        process.env.SCOPEPAY_PUBLIC_ORIGIN
+          ? new URL(process.env.SCOPEPAY_PUBLIC_ORIGIN).origin
+          : "https://scopepay.manus.space"
+      );
       expect(returnUrl.pathname).toBe(`/client/${CLIENT_TOKEN}`);
       expect(returnUrl.searchParams.get("paypal")).toBe("return");
       expect(cancelUrl.origin).toBe(returnUrl.origin);
