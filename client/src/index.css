@@ -2494,6 +2494,14 @@ textarea {
   transform: translateY(-1px);
 }
 
+.paypal-link-note {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .recovery-instruction {
   color: var(--red);
 }

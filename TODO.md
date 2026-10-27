@@ -45,4 +45,14 @@ The live demo is https://scopepay.manus.space. A current read-only status check 
 
 ## Provider and UI evidence — October 27, 2026
 
-A single read-only Sandbox GET of the saved order, using ScopePay’s server-side order/reference/amount/currency validators, returned provider status `APPROVED` with no matching completed capture. The local payment row remains pending with no capture reference. The supplied client-review capability is revoked, so this direct provider read did not exercise the public same-order route or reconcile the application ledger. `pnpm check`, 134 tests across 13 files, `pnpm build`, and `git diff --check` passed; payment progress behavior is covered by mocked tests only. No replacement, reissue, buyer login, approval, capture, or payment-record write occurred. The project still does not claim a completed payment.
+A single read-only Sandbox GET of the saved order, using ScopePay’s server-side order/reference/amount/currency validators, returned provider status `APPROVED` with no matching completed capture. The local payment row remains pending with no capture reference. The supplied client-review capability is revoked, so this direct provider read did not exercise the public same-order route or reconcile the application ledger. `pnpm check`, 143 tests across 13 files, `pnpm build`, and `git diff --check` passed; payment progress behavior is covered by mocked tests only. No replacement, reissue, buyer login, approval, capture, or payment-record write occurred. The project still does not claim a completed payment.
+
+
+## October 27 PayPal checkout-link clarity
+
+- [x] **Clearly label and safely open every direct PayPal Sandbox link.** In the public checkout and owner Payments ledger, the preparation control must describe PayPal Sandbox checkout; the follow-up link must say “Open PayPal Sandbox checkout” and explain that it opens PayPal Sandbox in a new tab for a Sandbox Personal buyer, not a live PayPal account. Keep the provider-returned approval URL only when it is HTTPS on `www.sandbox.paypal.com`, with no username/password; server and browser must both validate it. Keep `target="_blank"`, `rel="noopener noreferrer"`, and `referrerPolicy="no-referrer"`. Do not expose the private order token, imply a live payment, or create/reissue/capture an order as part of link-wording verification.
+
+
+## PayPal link evidence — October 27, 2026
+
+Client checkout and owner Payments links show the explicit Sandbox wording and the buyer/merchant guidance. Server and browser enforce HTTPS `www.sandbox.paypal.com`, and mocked tests verify safe new-tab/referrer attributes and reject unsafe hosts. The provider URL was not opened; no buyer flow or transaction action was initiated.

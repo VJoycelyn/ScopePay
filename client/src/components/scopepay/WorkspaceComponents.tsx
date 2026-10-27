@@ -671,15 +671,24 @@ export function PaymentsPanel({
                         </div>
                       )}
                       {approvalLinks[document.id] && (
-                        <a
-                          className="paypal-continue-link"
-                          href={approvalLinks[document.id]}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          referrerPolicy="no-referrer"
-                        >
-                          Continue to PayPal <ExternalLink size={14} />
-                        </a>
+                        <>
+                          <a
+                            className="paypal-continue-link"
+                            href={approvalLinks[document.id]}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            referrerPolicy="no-referrer"
+                            aria-label="Open PayPal Sandbox checkout in a new tab"
+                          >
+                            Open PayPal Sandbox checkout{" "}
+                            <ExternalLink size={14} />
+                          </a>
+                          <small className="paypal-link-note">
+                            Opens PayPal Sandbox in a new tab at
+                            https://www.sandbox.paypal.com. Use a Sandbox
+                            Personal buyer account, not a live PayPal account.
+                          </small>
+                        </>
                       )}
                       {recoverySucceeded && (
                         <div className="recovery-client-link">

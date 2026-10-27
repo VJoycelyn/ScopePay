@@ -215,6 +215,12 @@ function buttonNamed(value: unknown, name: string) {
   return buttons(value).find(button => renderedText(button).includes(name));
 }
 
+function linkNamed(value: unknown, name: string) {
+  return collectElements(value)
+    .filter(element => element.type === "a")
+    .find(link => renderedText(link).includes(name));
+}
+
 function installBrowserFakes() {
   const container = { innerHTML: "" };
   const scripts: any[] = [];
@@ -312,7 +318,7 @@ describe("PayPalCheckout payment safety UI", () => {
       "opaque PayPal SDK failure"
     );
     expect(
-      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+      buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
     ).toBeUndefined();
   });
 
@@ -408,7 +414,7 @@ describe("PayPalCheckout payment safety UI", () => {
 
     expect(renderedText(runtime.tree)).toContain("Read-only check");
     expect(
-      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+      buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
     ).toBeUndefined();
     expect(buttonNamed(runtime.tree, "Preparing direct link")).toBeUndefined();
     expect(capturedOptions).toHaveLength(1);
@@ -453,6 +459,62 @@ describe("PayPalCheckout payment safety UI", () => {
     expect(testState.api.captureOrder).not.toHaveBeenCalled();
   });
 
+  it("labels the direct link as PayPal Sandbox and opens its safe URL in a new tab", async () => {
+    const approvalUrl =
+      "https://www.sandbox.paypal.com/checkoutnow?token=fictional-order";
+    testState.api.createOrder.mockResolvedValue({
+      id: "same-provider-order",
+      approvalUrl,
+    });
+    const { capturedOptions, runtime } = mount(makeReview("accepted", ""));
+    await expect(capturedOptions[0].createOrder()).resolves.toBe(
+      "same-provider-order"
+    );
+    runtime.flush();
+
+    const link = linkNamed(runtime.tree, "Open PayPal Sandbox checkout");
+    expect(link?.props).toMatchObject({
+      href: approvalUrl,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      referrerPolicy: "no-referrer",
+      "aria-label": "Open PayPal Sandbox checkout in a new tab",
+    });
+    expect(renderedText(runtime.tree)).toContain(
+      "Sign in with a Sandbox Personal buyer account"
+    );
+    expect(renderedText(runtime.tree)).toContain(
+      "not your live PayPal account"
+    );
+    expect(
+      buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
+    ).toBeDefined();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+  });
+
+  it("does not show a fake PayPal link when the provider returned none", async () => {
+    testState.api.createOrder.mockResolvedValue({
+      id: "same-provider-order",
+      approvalUrl: null,
+    });
+    const { capturedOptions, runtime } = mount(makeReview("accepted", ""));
+    await expect(capturedOptions[0].createOrder()).resolves.toBe(
+      "same-provider-order"
+    );
+    runtime.flush();
+
+    expect(
+      linkNamed(runtime.tree, "Open PayPal Sandbox checkout")
+    ).toBeUndefined();
+    expect(renderedText(runtime.tree)).toContain(
+      "No usable PayPal Sandbox approval link was returned"
+    );
+    expect(
+      buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
+    ).toBeDefined();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+  });
+
   it("rejects a capture result that does not match the accepted amount", async () => {
     testState.api.captureOrder.mockResolvedValue({
       status: "paid",
@@ -479,7 +541,7 @@ describe("PayPalCheckout payment safety UI", () => {
     expect(capturedOptions).toHaveLength(0);
     expect(buttonNamed(runtime.tree, "Check for owner recovery")).toBeDefined();
     expect(
-      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+      buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
     ).toBeUndefined();
     expect(testState.api.clientReview).not.toHaveBeenCalled();
     expect(testState.api.createOrder).not.toHaveBeenCalled();
@@ -499,7 +561,7 @@ describe("PayPalCheckout payment safety UI", () => {
       "No fresh owner-recovered order"
     );
     expect(
-      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+      buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
     ).toBeUndefined();
     expect(testState.api.reconcileOrder).not.toHaveBeenCalled();
     expect(testState.api.captureOrder).not.toHaveBeenCalled();
@@ -527,7 +589,7 @@ describe("PayPalCheckout payment safety UI", () => {
     expect(onReview).toHaveBeenCalledWith(next);
     expect(renderedText(runtime.tree)).toContain("Owner recovery found");
     expect(
-      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+      buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
     ).toBeDefined();
     expect(testState.api.createOrder).not.toHaveBeenCalled();
     expect(testState.api.captureOrder).not.toHaveBeenCalled();
@@ -549,7 +611,7 @@ describe("PayPalCheckout payment safety UI", () => {
       expect(renderedText(runtime.tree)).toContain("terms changed");
       expect(onReview).not.toHaveBeenCalled();
       expect(
-        buttonNamed(runtime.tree, "Prepare direct PayPal link")
+        buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
       ).toBeUndefined();
       expect(testState.api.reconcileOrder).not.toHaveBeenCalled();
       expect(testState.api.captureOrder).not.toHaveBeenCalled();
@@ -576,7 +638,7 @@ describe("PayPalCheckout payment safety UI", () => {
     runtime.flush();
     expect(renderedText(runtime.tree)).toContain("payment status is uncertain");
     expect(
-      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+      buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
     ).toBeUndefined();
     expect(onReview).not.toHaveBeenCalled();
     expect(testState.api.createOrder).not.toHaveBeenCalled();
@@ -599,7 +661,7 @@ describe("PayPalCheckout payment safety UI", () => {
     runtime.flush();
     expect(renderedText(runtime.tree)).toContain("Payment is pending");
     expect(
-      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+      buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
     ).toBeUndefined();
     expect(onReview).not.toHaveBeenCalled();
     expect(testState.api.captureOrder).not.toHaveBeenCalled();
@@ -660,7 +722,7 @@ describe("PayPalCheckout stale SDK instance protection", () => {
     );
     expect(renderedText(runtime.tree)).not.toContain("stale SDK callback");
     expect(
-      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+      buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
     ).toBeUndefined();
     expect(testState.api.captureOrder).not.toHaveBeenCalled();
     expect(testState.api.createOrder).not.toHaveBeenCalled();
@@ -732,7 +794,7 @@ describe("PayPalCheckout stale SDK instance protection", () => {
     await expect(pending).rejects.toThrow("PayPal order preparation failed");
     runtime.flush();
     expect(
-      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+      buttonNamed(runtime.tree, "Prepare PayPal Sandbox checkout")
     ).toBeUndefined();
     expect(renderedText(runtime.tree)).not.toContain("stale-prepared-order");
     expect(testState.api.captureOrder).not.toHaveBeenCalled();
@@ -785,8 +847,10 @@ describe("PayPalCheckout unavailable client-link boundary", () => {
       const oldSdk = capturedOptions[0];
       const verify = buttonNamed(runtime.tree, "Verify this same order")!.props!
         .onClick;
-      const prepare = buttonNamed(runtime.tree, "Prepare direct PayPal link")!
-        .props!.onClick;
+      const prepare = buttonNamed(
+        runtime.tree,
+        "Prepare PayPal Sandbox checkout"
+      )!.props!.onClick;
       await verify();
       runtime.flush();
       expect(renderedText(runtime.tree)).toContain(linkMessage);

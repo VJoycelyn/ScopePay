@@ -34,7 +34,7 @@ Create the proposed change order. Review its deliverables and manually set the f
 
 ## 1:45–2:20 — Show explicit acceptance and actual PayPal capture
 
-Open the new client-review link. Show its exact change-order version and USD total. Select **I have reviewed and accept this scope and price**, then **Accept this scope**. Click PayPal checkout; if the secure popup stalls or is blocked, use **Continue to PayPal**. Approve using the sandbox personal buyer. Hide the login fields. Wait for the actual **Payment recorded by the sandbox** state.
+Open the new client-review link. Show its exact change-order version and USD total. Select **I have reviewed and accept this scope and price**, then **Accept this scope**. Click PayPal checkout; if the secure popup stalls or is blocked, use **Open PayPal Sandbox checkout**. Approve using the Sandbox Personal buyer. Hide the login fields. Wait for the actual **Payment recorded by the sandbox** state.
 
 **Voiceover:** “Checkout unlocks after explicit acceptance. PayPal sandbox processes the approval. ScopePay marks this paid only after the server verifies the matching completed capture.”
 

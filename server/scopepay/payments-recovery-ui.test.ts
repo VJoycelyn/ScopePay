@@ -290,6 +290,19 @@ describe("PaymentsPanel Sandbox recovery safety UI", () => {
     expect(renderedText(runtime.tree)).toContain(
       "Personal Sandbox buyer account"
     );
+    const approvalLink = elementsOfType(runtime.tree, "a").find(link =>
+      renderedText(link).includes("Open PayPal Sandbox checkout")
+    );
+    expect(approvalLink?.props).toMatchObject({
+      href: "https://www.sandbox.paypal.com/checkoutnow?token=fresh",
+      target: "_blank",
+      rel: "noopener noreferrer",
+      referrerPolicy: "no-referrer",
+      "aria-label": "Open PayPal Sandbox checkout in a new tab",
+    });
+    expect(renderedText(runtime.tree)).toContain(
+      "Use a Sandbox Personal buyer account, not a live PayPal account"
+    );
     expect(
       buttonNamed(runtime.tree, "Replacement already prepared")!.props!.disabled
     ).toBe(true);

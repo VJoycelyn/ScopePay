@@ -19,6 +19,8 @@ import { errorMessage, formatMoney } from "./shared";
 import { SandboxRecoveryGuide } from "./SandboxRecoveryGuide";
 
 const PAYPAL_LOG_PREFIX = "[ScopePay PayPal]";
+const PAYPAL_LINK_NOTE =
+  "Opens PayPal Sandbox in a new tab at https://www.sandbox.paypal.com. Sign in with a Sandbox Personal buyer account, not your live PayPal account.";
 const SAFE_API_CODES = new Set([
   "PAYPAL_ORDER_NOT_FOUND",
   "ORDER_NOT_FOUND",
@@ -405,10 +407,13 @@ export function PayPalCheckout({
       orderIdRef.current = result.id;
       const safeUrl = safeSandboxApprovalUrl(result.approvalUrl);
       setApprovalUrl(safeUrl);
-      if (!safeUrl)
+      if (!safeUrl) {
         showPaymentError(
-          "The server prepared the PayPal order but did not return a usable approval link. Try the PayPal button or ask the workspace owner to verify Sandbox setup."
+          review.document.status === "payment_pending"
+            ? "The saved PayPal Sandbox order has no usable continuation link. Verify this same order or contact the workspace owner; do not create a replacement."
+            : "No usable PayPal Sandbox approval link was returned. The PayPal button above can still open checkout when available; contact the workspace owner if it is missing."
         );
+      }
       setPaymentState("idle");
       return result;
     } catch (error) {
@@ -701,7 +706,7 @@ export function PayPalCheckout({
         setPaymentState("error");
         if (!paymentErrorRef.current)
           showPaymentError(
-            "PayPal could not finish this checkout. ScopePay has not verified a completed capture. Verify this same order before retrying; if the popup did not continue, use the direct PayPal link below."
+            "PayPal could not finish this checkout. ScopePay has not verified a completed capture. Verify this same order before retrying; use the PayPal Sandbox link below only if it is displayed. If no link appears, contact the workspace owner rather than creating another order."
           );
       },
     });
@@ -844,21 +849,25 @@ export function PayPalCheckout({
                 <ExternalLink size={15} />
               )}
               {paymentState === "creating"
-                ? "Preparing PayPal link…"
-                : "Prepare PayPal continuation link"}
+                ? "Preparing PayPal Sandbox checkout…"
+                : "Prepare PayPal Sandbox checkout"}
             </button>
           </div>
         )}
         {approvalUrl && !orderUnavailable && (
-          <a
-            className="paypal-continue-link"
-            href={approvalUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            referrerPolicy="no-referrer"
-          >
-            Continue to PayPal <ExternalLink size={14} />
-          </a>
+          <>
+            <a
+              className="paypal-continue-link"
+              href={approvalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              referrerPolicy="no-referrer"
+              aria-label="Open PayPal Sandbox checkout in a new tab"
+            >
+              Open PayPal Sandbox checkout <ExternalLink size={14} />
+            </a>
+            <small className="paypal-link-note">{PAYPAL_LINK_NOTE}</small>
+          </>
         )}
         <small className="checkout-footnote">
           Retry is server-checked and uses the same PayPal order; it never
@@ -927,26 +936,31 @@ export function PayPalCheckout({
                 <ExternalLink size={15} />
               )}
               {paymentState === "creating"
-                ? "Preparing direct link…"
-                : "Prepare direct PayPal link"}
+                ? "Preparing PayPal Sandbox checkout…"
+                : "Prepare PayPal Sandbox checkout"}
             </button>
             <small>
-              This is a two-step action. First prepare the server order, then
-              click the link to continue in PayPal.
+              First, prepare or reuse the same server-validated order. The
+              PayPal Sandbox approval link will appear here; live PayPal is not
+              used.
             </small>
           </div>
         </>
       )}
       {approvalUrl && !orderUnavailable && (
-        <a
-          className="paypal-continue-link"
-          href={approvalUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          referrerPolicy="no-referrer"
-        >
-          Continue to PayPal <ExternalLink size={14} />
-        </a>
+        <>
+          <a
+            className="paypal-continue-link"
+            href={approvalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            referrerPolicy="no-referrer"
+            aria-label="Open PayPal Sandbox checkout in a new tab"
+          >
+            Open PayPal Sandbox checkout <ExternalLink size={14} />
+          </a>
+          <small className="paypal-link-note">{PAYPAL_LINK_NOTE}</small>
+        </>
       )}
       {(paymentState === "creating" || paymentState === "capturing") && (
         <div className="checkout-state">

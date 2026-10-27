@@ -1,5 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getPaypalOrder } from "./paypal";
+import { safeSandboxApprovalUrl } from "../../client/src/lib/paypal-safety";
+import { extractApprovalUrl, getPaypalOrder } from "./paypal";
+
+describe("PayPal Sandbox approval URL allowlist", () => {
+  const safeUrl =
+    "https://www.sandbox.paypal.com/checkoutnow?token=fictional-order";
+
+  it.each(["approve", "payer-action"])(
+    "accepts a provider %s link on the official Sandbox host",
+    rel => {
+      const payload = { links: [{ rel, href: safeUrl }] };
+      expect(extractApprovalUrl(payload)).toBe(safeUrl);
+      expect(safeSandboxApprovalUrl(safeUrl)).toBe(safeUrl);
+    }
+  );
+
+  it.each([
+    "http://www.sandbox.paypal.com/checkoutnow",
+    "https://www.paypal.com/checkoutnow",
+    "https://www.sandbox.paypal.com.attacker.example/checkoutnow",
+    "https://user@www.sandbox.paypal.com/checkoutnow",
+  ])("rejects non-Sandbox or unsafe approval URL %s", url => {
+    expect(
+      extractApprovalUrl({ links: [{ rel: "approve", href: url }] })
+    ).toBeNull();
+    expect(safeSandboxApprovalUrl(url)).toBeNull();
+  });
+
+  it("does not expose a provider link with an unrelated relation", () => {
+    const payload = { links: [{ rel: "self", href: safeUrl }] };
+    expect(extractApprovalUrl(payload)).toBeNull();
+  });
+});
 
 describe("PayPal saved-order error classification", () => {
   beforeEach(() => {
