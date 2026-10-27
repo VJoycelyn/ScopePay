@@ -35,3 +35,14 @@ The live demo is https://scopepay.manus.space. A current read-only status check 
 ## October 27 live same-order retest — open
 
 - [ ] **Retest the same saved PayPal order through a valid current client-review link.** The supplied link is confirmed revoked, so its 404 is correct and it cannot be used to query PayPal. The owner must provide a current valid review link for the same accepted document; preserve its scope, version, amount, and saved order. Use only the same-order GET verification after confirming which review is being checked. Do not create/reissue an order, rotate a client capability, accept terms, log in as a buyer, or capture as part of this retest. Report the provider-backed result; call the payment paid only if a matching completed capture is server-verified.
+
+
+## October 27 pending verification and payment receipt
+
+- [x] **Keep pending payment state authoritative when dismissing an error.** For a `payment_pending` document, show that the saved order is not confirmed as paid and keep same-order verification visible. “Dismiss” may hide only the transient error text; it must not mark the document paid, clear stored order/capture state, create a replacement, or call capture. An `APPROVED` PayPal order without a matching `COMPLETED` capture remains pending.
+- [x] **Show all verified payment-completion steps after capture.** Only when ScopePay’s server returns `paid` after verifying the PayPal Sandbox order, accepted document/version reference, exact integer-cent amount, USD currency, and completed capture, show a clear completion receipt listing (1) exact version accepted, (2) Sandbox buyer approval and capture verified, and (3) payment recorded in the ScopePay ledger. Pending/approved-but-uncaptured UI must not show these steps as complete. Confirm the current provider/order read remains unconfirmed; do not generate, replace, accept, approve, or capture an order as part of this UI fix.
+
+
+## Provider and UI evidence — October 27, 2026
+
+A single read-only Sandbox GET of the saved order, using ScopePay’s server-side order/reference/amount/currency validators, returned provider status `APPROVED` with no matching completed capture. The local payment row remains pending with no capture reference. The supplied client-review capability is revoked, so this direct provider read did not exercise the public same-order route or reconcile the application ledger. `pnpm check`, 134 tests across 13 files, `pnpm build`, and `git diff --check` passed; payment progress behavior is covered by mocked tests only. No replacement, reissue, buyer login, approval, capture, or payment-record write occurred. The project still does not claim a completed payment.

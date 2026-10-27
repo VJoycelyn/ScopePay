@@ -37,3 +37,10 @@ A final read-only integration review found no blocking issues in initial/late un
 The repair was published successfully as checkpoint `35242fc2fc4aa38257866cd704594c93e42741ae` at [scopepay.manus.space](https://scopepay.manus.space). A plain page reload of the supplied, revoked review capability now displays the specific `CLIENT_LINK_NOT_FOUND` message: the saved PayPal order could not be checked, the owner must provide a current link, and this does not prove that no payment completed. No PayPal buttons, order preparation, or verification controls are shown for that link.
 
 This live check verifies the invalid-link safety/UI path only. It does **not** retest PayPal availability for the saved order, and it does not determine whether a prior provider payment completed. The owner must supply a valid current client-review link for the same accepted document before the same-order GET can be tested again. No transaction action occurred during the live UI check.
+
+
+## Subsequent saved-order GET and payment progress — October 27, 2026
+
+After the page-only 404 check, one user-approved, read-only Sandbox GET used the existing saved order and ScopePay's server-side reference/version/amount/currency validators. The provider status was `APPROVED`, with no matching completed capture; the local record remained pending and had no capture reference. This direct helper read did not exercise or reconcile the client-token-scoped application route, because the supplied client-review capability remains revoked. It did not create an order, mutate the database, request capture, or rotate a link. The payment is not confirmed as paid.
+
+The checkout UI now keeps Dismiss limited to transient error text and shows pending progress without checkmarks for unverified steps. A fully complete receipt appears only after the server returns a verified `paid` result and lists the exact accepted version, matching Sandbox capture, and ledger recording. TypeScript, 134 mocked tests across 13 files, production build, and whitespace checks passed. No live capture is claimed; same-order application-route retest still needs an active current review link.

@@ -717,6 +717,73 @@ describe("ScopePay accepted-version checkout routes", () => {
     }
   );
 
+  it("keeps an APPROVED provider order pending on same-order GET without capture or replacement", async () => {
+    mocks.reset();
+    const order = mocks.seedOrder({
+      paypal_order_id: "paypal-approved-get",
+      status: "pending",
+    });
+    const document = documentFromState();
+    document.status = "payment_pending";
+    document.paypalOrderId = order.paypal_order_id;
+    mocks.state.providers.set(
+      order.paypal_order_id,
+      mocks.providerPayload(
+        order.paypal_order_id,
+        "APPROVED",
+        order.document_id,
+        order.document_version,
+        order.amount_cents
+      )
+    );
+
+    const result = await get(
+      `/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}`
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body.document.status).toBe("payment_pending");
+    expect(result.body.document.paypalOrderId).toBe(order.paypal_order_id);
+    expect(order.status).toBe("pending");
+    expect(order.capture_id).toBeNull();
+    expect(mocks.paypal.getPaypalOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.state.captureCalls).toHaveLength(0);
+    expect(mocks.state.createCalls).toHaveLength(0);
+  });
+
+  it("does not mark paid on same-order GET when a completed capture has the wrong amount", async () => {
+    mocks.reset();
+    const order = mocks.seedOrder({
+      paypal_order_id: "paypal-capture-mismatch-get",
+      status: "pending",
+    });
+    const document = documentFromState();
+    document.status = "payment_pending";
+    document.paypalOrderId = order.paypal_order_id;
+    const payload = mocks.providerPayload(
+      order.paypal_order_id,
+      "COMPLETED",
+      order.document_id,
+      order.document_version,
+      order.amount_cents,
+      "COMPLETED",
+      "capture-mismatch-get"
+    ) as any;
+    payload.purchase_units[0].payments.captures[0].amount.value = "1249.99";
+    mocks.state.providers.set(order.paypal_order_id, payload);
+
+    const result = await get(
+      `/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}`
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body.document.status).toBe("payment_pending");
+    expect(order.status).toBe("pending");
+    expect(order.capture_id).toBeNull();
+    expect(mocks.state.captureCalls).toHaveLength(0);
+    expect(mocks.state.createCalls).toHaveLength(0);
+  });
+
   it("does not issue a second capture while a fresh capture lease is active", async () => {
     mocks.reset();
     const order = mocks.seedOrder({

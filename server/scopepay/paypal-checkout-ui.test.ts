@@ -368,6 +368,26 @@ describe("PayPalCheckout payment safety UI", () => {
     expect(capturedOptions).toHaveLength(0);
     expect(testState.api.createOrder).not.toHaveBeenCalled();
     expect(testState.api.captureOrder).not.toHaveBeenCalled();
+
+    expect(renderedText(runtime.tree)).toContain("PAYMENT RECOVERY");
+    expect(renderedText(runtime.tree)).toContain(
+      "Payment is not confirmed yet"
+    );
+    expect(renderedText(runtime.tree)).toContain(
+      "The ledger remains pending until the capture is verified."
+    );
+    buttonNamed(runtime.tree, "Dismiss")!.props!.onClick();
+    runtime.flush();
+    expect(renderedText(runtime.tree)).not.toContain(
+      "Payment is not confirmed yet"
+    );
+    expect(renderedText(runtime.tree)).toContain("PAYMENT RECOVERY");
+    expect(renderedText(runtime.tree)).toContain(
+      "The ledger remains pending until the capture is verified."
+    );
+    expect(buttonNamed(runtime.tree, "Verify payment")).toBeDefined();
+    expect(testState.api.createOrder).not.toHaveBeenCalled();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
   });
 
   it("does not restore purchase controls when an unavailable-order error is dismissed", async () => {
@@ -598,6 +618,19 @@ describe("PayPalCheckout payment safety UI", () => {
     runtime.flush();
     expect(renderedText(runtime.tree)).toContain(
       "Payment recorded by the sandbox"
+    );
+    expect(renderedText(runtime.tree)).toContain(
+      "PAYPAL SANDBOX · PAYMENT COMPLETE"
+    );
+    expect(renderedText(runtime.tree)).toContain("Exact scope accepted");
+    expect(renderedText(runtime.tree)).toContain(
+      "PayPal Sandbox approval and capture verified"
+    );
+    expect(renderedText(runtime.tree)).toContain(
+      "The server matched a completed capture to version 2 for $12.50 USD."
+    );
+    expect(renderedText(runtime.tree)).toContain(
+      "Payment recorded in ScopePay"
     );
     expect(onReview).toHaveBeenCalledWith(paid);
     expect(testState.api.captureOrder).not.toHaveBeenCalled();

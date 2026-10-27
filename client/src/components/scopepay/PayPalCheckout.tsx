@@ -188,6 +188,69 @@ declare global {
   }
 }
 
+function renderPaymentProgress(review: ClientReview, complete: boolean) {
+  const version = review.document.version;
+  const total = formatMoney(review.document.totalCents);
+
+  return (
+    <ol
+      className="payment-progress"
+      aria-label="PayPal Sandbox payment progress"
+    >
+      <li className="payment-progress-step is-complete">
+        <CheckCircle2 size={16} aria-hidden="true" />
+        <div>
+          <strong>Exact scope accepted</strong>
+          <span>Version {version} and its agreed total are locked.</span>
+        </div>
+      </li>
+      <li
+        className={`payment-progress-step ${complete ? "is-complete" : "is-current"}`}
+        aria-current={complete ? undefined : "step"}
+      >
+        {complete ? (
+          <CheckCircle2 size={16} aria-hidden="true" />
+        ) : (
+          <span className="payment-progress-marker" aria-hidden="true">
+            2
+          </span>
+        )}
+        <div>
+          <strong>
+            {complete
+              ? "PayPal Sandbox approval and capture verified"
+              : "PayPal Sandbox capture not confirmed"}
+          </strong>
+          <span>
+            {complete
+              ? `The server matched a completed capture to version ${version} for ${total} USD.`
+              : `The server has not confirmed a completed capture for ${total} USD. Approval alone is not payment.`}
+          </span>
+        </div>
+      </li>
+      <li
+        className={`payment-progress-step ${complete ? "is-complete" : "is-upcoming"}`}
+      >
+        {complete ? (
+          <CheckCircle2 size={16} aria-hidden="true" />
+        ) : (
+          <span className="payment-progress-marker" aria-hidden="true">
+            3
+          </span>
+        )}
+        <div>
+          <strong>Payment recorded in ScopePay</strong>
+          <span>
+            {complete
+              ? "The verified capture is saved in the project ledger."
+              : "The ledger remains pending until the capture is verified."}
+          </span>
+        </div>
+      </li>
+    </ol>
+  );
+}
+
 export function PayPalCheckout({
   token,
   review,
@@ -669,12 +732,25 @@ export function PayPalCheckout({
 
   if (review.document.status === "paid" || paymentState === "paid")
     return (
-      <div className="paid-confirmation">
-        <CheckCircle2 size={22} />
-        <div>
-          <strong>Payment recorded by the sandbox.</strong>
-          <span>The verified capture is now part of the project ledger.</span>
+      <div className="paid-confirmation" role="status" aria-live="polite">
+        <div className="paid-confirmation-heading">
+          <CheckCircle2 size={22} aria-hidden="true" />
+          <div>
+            <span className="micro-label">
+              PAYPAL SANDBOX · PAYMENT COMPLETE
+            </span>
+            <strong>Payment recorded by the sandbox.</strong>
+            <span>
+              {formatMoney(review.document.totalCents)} USD · Version{" "}
+              {review.document.version}
+            </span>
+          </div>
         </div>
+        {renderPaymentProgress(review, true)}
+        <small className="paid-confirmation-note">
+          ScopePay shows completion only after the server verifies the matching
+          order, accepted version, amount, currency, and completed capture.
+        </small>
       </div>
     );
 
@@ -710,6 +786,7 @@ export function PayPalCheckout({
           The server has not declared this payment failed. Verify the saved
           PayPal order before trying capture again.
         </p>
+        {renderPaymentProgress(review, false)}
         {paymentError && (
           <div className="inline-message error">
             <XCircle size={14} />

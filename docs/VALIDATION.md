@@ -39,3 +39,10 @@ The repair distinguishes genuine unavailable capabilities from database/service 
 
 
 Published checkpoint `35242fc2fc4aa38257866cd704594c93e42741ae` successfully to `https://scopepay.manus.space`. A plain GET reload of the revoked review link displayed the specific unavailable-link guidance and no payment controls. This confirms the published invalid-link UI fix only; same-order PayPal availability and completed-capture status remain unverified until the owner supplies a valid current client-review link for the same accepted document.
+
+
+## Pending-order verification and payment-progress UI — October 27, 2026
+
+At the user's direction, one read-only PayPal Sandbox GET of the already-saved order used ScopePay's server-side order/reference/version/amount/currency validators. PayPal returned `APPROVED`, matching the accepted version, amount, and USD currency, but no matching completed capture. The local ScopePay payment record remains `pending` / `payment_pending`, with no capture reference; this is not a paid result. The currently supplied client-review capability is revoked, so the app's client-token-scoped same-order GET still cannot be exercised; the direct provider read did not reconcile or write the ledger. No order was created/replaced, no link was rotated, and no capture was requested.
+
+The checkout now shows an accessible progress list for pending and server-paid states. Pending never appears complete; Dismiss clears only transient error text. The paid receipt lists accepted version, exact USD capture verification, and ledger recording only after the server-backed paid result. New route tests keep `APPROVED` without capture and capture-amount mismatch unpaid. `pnpm check`, **134 tests across 13 files**, `pnpm build`, and `git diff --check` passed. These payment-flow tests are mocked; no buyer-approved completed capture is claimed.
