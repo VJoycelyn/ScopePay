@@ -1,6 +1,6 @@
 # PayPal AI Hackathon — verified requirements
 
-Verified from the official Devpost and PayPal pages on October 20, 2026. This is the PayPal AI Hackathon, not the OpenCV competition.
+Official requirements were first checked on October 20, 2026 and rechecked against live Devpost and PayPal Developer sources on October 26, 2026. See [the current project-specific readiness review](docs/DEVPOST_READINESS_REVIEW.md). This is the PayPal AI Hackathon, not the OpenCV competition.
 
 ## What the entry must do
 

@@ -28,14 +28,16 @@ The important design challenge is to keep model output separate from financial s
 
 ## Tools used
 
-- PayPal Developer Platform: sandbox OAuth and Orders v2 creation were verified against real sandbox APIs. The PayPal JavaScript SDK, buyer-approval flow, server capture verification, and recovery UI are implemented; a browser buyer-approval/completed-capture walkthrough remains to be demonstrated.
+- PayPal Developer Platform: the configured Sandbox app passed OAuth with HTTP 200, and the live client review rendered the PayPal JavaScript SDK checkout buttons. Orders v2 creation, buyer approval, server capture verification, and recovery UI are implemented; a browser buyer-approval/completed-capture walkthrough remains to be demonstrated.
 - Manus built-in LLM: server-side structured scope drafting and scope/request analysis were exercised with live model calls on fictional inputs.
 - React, TypeScript, Express, MySQL, Vite, and the MIT license.
 - Manus AI coding assistance helped generate and edit the code. An original brand icon was generated using Manus image generation. Third-party open-source libraries retain their own licenses.
 
 ## Testing and impact
 
-The current repaired source passed TypeScript checking, its production build, and **53 automated tests across 6 files**, including 30 mocked checkout-route scenarios for accepted quotes and change orders plus a PayPal Sandbox URL allowlist test. The earlier 11 API smoke checks were run before this repair and have not been repeated; their scope is not evidence of an end-to-end buyer payment. The existing Northline USD 12.50 provider order returns `404 / INVALID_RESOURCE_ID`. Check PayPal Sandbox Activity before using the owner-confirmed recovery flow; a completed buyer-approved capture still needs to be demonstrated. Three developer-authored synthetic AI scenarios were evaluated: the initial run had two valid matching classifications and one validation failure; after fixing the advisory-effort validator, only the affected scenario was rerun successfully. This is a development check, not a general accuracy benchmark or user study. See `docs/VALIDATION.md` and `docs/PAYPAL_SETUP_AUDIT.md` for exact evidence boundaries. No customer savings, revenue, production readiness, or guaranteed outcome is claimed.
+The current source passes TypeScript checking, its production build, and **113 automated tests across 12 files**, including mocked checkout-route, transport, UI-recovery, and company-scenario coverage. These tests do not prove a real payment. On October 26, the configured Sandbox app returned HTTP 200 from OAuth and the live accepted review rendered PayPal and debit/card checkout buttons; this confirms configuration and SDK readiness only. No buyer-approved completed capture was verified during this review.
+
+The earlier 11 API smoke checks were run before later changes and have not been repeated; they are not evidence of an end-to-end buyer payment. The saved Northline version 2 USD 12.50 provider order was previously read as `404 / INVALID_RESOURCE_ID`; the workspace owner must check PayPal Sandbox Business merchant Activity before using recovery. Three developer-authored synthetic AI scenarios were evaluated: the initial run had two valid matching classifications and one validation failure; after fixing the advisory-effort validator, only the affected scenario was rerun successfully. This is a development check, not a general accuracy benchmark or user study. See `docs/VALIDATION.md`, `docs/PAYPAL_SETUP_AUDIT.md`, and `docs/DEVPOST_READINESS_REVIEW.md` for exact evidence boundaries. No customer savings, revenue, production readiness, or guaranteed outcome is claimed.
 
 ## Links and remaining submission steps
 

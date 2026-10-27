@@ -1,6 +1,6 @@
 # PayPal AI Hackathon — official rules recheck
 
-**Status checked:** official pages available on October 20/21, 2026. This report uses only the official Devpost challenge pages and PayPal Developer Community blog. ScopePay status below is supplied project context; I did **not** inspect its code or independently verify execution.
+**Status checked:** this summary was first prepared from official pages on October 20/21, 2026; the live rules and dates were rechecked on October 26. For current project evidence, the Sandbox setup check, and remaining submission actions, see [the current readiness review](DEVPOST_READINESS_REVIEW.md). The project status described below reflects the earlier review and should not replace the current report.
 
 ## Deadline and schedule
 
