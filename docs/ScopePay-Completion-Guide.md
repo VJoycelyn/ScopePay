@@ -6,7 +6,7 @@
 
 The verified published address is [https://scopepay.manus.space](https://scopepay.manus.space). The page title, public Northline Coffee v2 review, and PayPal JavaScript SDK Buttons are live on this origin. A visible **Prepare direct PayPal link** action gives the buyer a fallback if the SDK's secure popup stalls at **Click to Continue**. This browser inspection did not create an order or capture payment.
 
-The current source default for PayPal return/cancel URLs is `https://scopepay.manus.space`; `SCOPEPAY_PUBLIC_ORIGIN` is an optional exact HTTPS override. Before inviting a buyer, confirm the latest published version is the repair that aligns the callback origin with this host. If you deliberately change to a custom hostname, update the override and verify the PayPal return goes to that exact site. A paid custom domain is not required by the hackathon. [1] [2]
+The latest published checkpoint is `0f9d33cf3b1068d5d3414905bab75a63ff6b9df1`; it defaults PayPal return/cancel URLs to `https://scopepay.manus.space`. `SCOPEPAY_PUBLIC_ORIGIN` remains an optional exact HTTPS override. If you deliberately change to another custom hostname, update the override and verify the PayPal return goes to that exact site. A paid custom domain is not required by the hackathon. [1] [2]
 
 Keep client-review links private. They contain review capabilities; never put them, an owner's workspace capability, or a real client's link in Devpost, a public README, a recording, or chat. Test public pages signed out while keeping the same project and database.
 
@@ -18,7 +18,7 @@ ScopePay was created during this task on October 20, within the October 1–Nove
 
 ## 3. Complete the actual Sandbox payment walkthrough
 
-The existing test is fictional **Northline Coffee**, accepted scope **version 2**, exactly **USD $12.50**, using a PayPal **Sandbox** personal buyer. The local order was created under an older/unavailable Sandbox app context; the currently configured PayPal app returns `404 / INVALID_RESOURCE_ID` for that provider order. Local `CREATED` status is not proof the provider order is usable or that a payment happened. The repair adds an owner-confirmed recovery path; it never auto-captures or replaces an order when provider status is pending or unknown.
+The existing test is fictional **Northline Coffee**, accepted scope **version 2**, exactly **USD $12.50**, using a PayPal **Sandbox** personal buyer. PayPal currently returns `404 / INVALID_RESOURCE_ID` for the locally saved provider order. The exact cause is unconfirmed; it may be missing/expired or associated with a different app. Local `CREATED` status is not proof the provider order is usable or that a payment happened. The repair adds an owner-confirmed recovery path; it never auto-captures or replaces an order when provider status is pending or unknown.
 
 1. Before recovery, check PayPal Developer Dashboard → **Sandbox Activity** for a completed USD $12.50 Northline transaction. If one exists, stop—do not create a replacement—and refresh ScopePay to verify/reconcile it.
 2. Only if Sandbox Activity shows no completed payment, open the freelancer workspace → **Payments** → **Northline Coffee v2** → **Show recovery options**. Confirm the no-capture checkbox and select **Create replacement Sandbox order**. This creates a Sandbox order only, performs no capture, and preserves accepted terms, version 2, and exactly USD $12.50. Existing same-version review links remain valid; the owner also gets a fresh continuation link to copy/resend.

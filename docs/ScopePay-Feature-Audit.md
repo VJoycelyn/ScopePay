@@ -1,6 +1,6 @@
 # ScopePay feature and hackathon audit
 
-**Review date:** October 23, 2026
+**Review date:** October 26, 2026
 
 **Scope:** Read-only review of the current source and the official PayPal AI Hackathon rules. This is not a penetration test, legal opinion, judging decision, or guarantee of eligibility or winning.
 
@@ -44,7 +44,7 @@ This is the hackathon package—not a checklist of invented app requirements:
 - [ ] Test judge access without a paywall/login and keep it working free of charge and without restriction through the official judging end time.
 - [ ] Entrant confirms eligibility, ownership/original work, rights/permissions, and disclosures; submit all required Devpost fields and save the receipt.
 
-The October 23 source repair passed TypeScript, 53 tests across 6 files, the production build, and whitespace checks. Deployment and source synchronization have separate release receipts. The buyer must still verify the single Northline v2 USD 12.50 payment end to end; order preparation or recovery alone is not enough.
+The final source passed TypeScript, 53 tests across 6 files, the production build, and whitespace checks. Canonical checkpoint `0f9d33cf3b1068d5d3414905bab75a63ff6b9df1` is published at `https://scopepay.manus.space`; the public GitHub source is synced at `b61e6f4`. The buyer must still verify the Northline v2 USD 12.50 payment end to end; order preparation or recovery alone is not enough.
 
 The official judging criteria—Technological Implementation, Design, Potential Impact, Innovation/Idea, and Presentation—are **equally weighted**. A strong PayPal+AI fit is positioning only; only judges can determine awards.
 
