@@ -2459,3 +2459,119 @@ textarea {
   color: var(--ink);
   font-size: 12px;
 }
+
+/* Visible role-specific Sandbox recovery, not a new checkout action. */
+.sandbox-recovery-guide {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--cobalt);
+  border-radius: 8px;
+  background: #f8f7f3;
+  color: var(--ink);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.recovery-guide-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.recovery-guide-heading svg {
+  flex: none;
+  color: var(--cobalt);
+}
+.recovery-guide-heading h3 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
+}
+.sandbox-recovery-guide p {
+  margin: 10px 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.sandbox-recovery-guide .recovery-terms {
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--cobalt);
+}
+.sandbox-recovery-steps {
+  margin: 14px 0;
+  padding-left: 22px;
+}
+.sandbox-recovery-steps li {
+  padding-left: 4px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.sandbox-recovery-steps li::marker {
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 600;
+  color: var(--cobalt);
+}
+.sandbox-recovery-steps li > strong {
+  display: block;
+  margin-bottom: 4px;
+}
+.sandbox-recovery-steps li > span {
+  display: block;
+  color: var(--muted);
+}
+.sandbox-recovery-guide a {
+  color: var(--cobalt);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  margin-top: 7px;
+}
+.sandbox-recovery-guide a:hover {
+  text-decoration: underline;
+}
+.sandbox-recovery-guide .recovery-guide-boundary {
+  border-top: 1px solid var(--rule);
+  padding-top: 10px;
+  color: var(--muted);
+}
+.recovery-check-status {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.recovery-check-status + button {
+  margin-top: 10px;
+  white-space: normal;
+}
+.checkout-help {
+  margin-top: 16px;
+}
+.checkout-help summary {
+  cursor: pointer;
+  color: var(--cobalt);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.checkout-box .inline-message {
+  flex-wrap: wrap;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.checkout-box .inline-message > span {
+  flex: 1;
+  min-width: 140px;
+}
+.checkout-box .inline-message .text-button {
+  flex: none;
+}
+@media (max-width: 600px) {
+  .sandbox-recovery-guide {
+    padding: 14px 12px;
+  }
+  .sandbox-recovery-guide p,
+  .sandbox-recovery-steps li {
+    font-size: 13px;
+  }
+}

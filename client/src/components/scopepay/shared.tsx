@@ -29,13 +29,13 @@ export const formatTime = (value?: string) =>
     : "—";
 const SAFE_SCOPEPAY_ERROR_MESSAGES: Record<string, string> = {
   PAYPAL_ORDER_NOT_FOUND:
-    "This PayPal Sandbox order is unavailable. Ask the workspace owner to check Sandbox Activity and confirm no payment completed, then use Payments recovery. The accepted version and existing review link stay available; the owner will also receive a fresh continuation link.",
+    "This PayPal Sandbox order is unavailable. Follow the recovery steps below; payment status is not confirmed.",
   CAPTURE_IN_PROGRESS:
     "A PayPal capture is still being processed. Wait briefly, then retry verification for this same order; do not create a replacement.",
   ORDER_SUPERSEDED:
     "The saved PayPal order changed during checkout. Refresh this same review and verify Sandbox Activity before continuing.",
   ORDER_NOT_FOUND:
-    "This PayPal Sandbox order is unavailable. Ask the workspace owner to check Sandbox Activity and confirm no payment completed, then use Payments recovery. The accepted version and existing review link stay available; the owner will also receive a fresh continuation link.",
+    "This PayPal Sandbox order is unavailable. Follow the recovery steps below; payment status is not confirmed.",
   ORDER_PENDING:
     "PayPal still shows this order as pending. No payment was recorded; do not create a replacement until the server says it is safe.",
   PAYMENT_MISMATCH:

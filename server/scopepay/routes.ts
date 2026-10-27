@@ -354,6 +354,8 @@ function publicReview(
     acceptedAt: document.acceptedAt,
     paidAt: document.paidAt,
     paypalOrderId: document.paypalOrderId,
+    paypalCaptureId:
+      document.status === "paid" ? document.paypalCaptureId : undefined,
   };
   return {
     projectName: project.name,

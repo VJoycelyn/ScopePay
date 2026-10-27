@@ -257,6 +257,29 @@ describe("ScopePay client payment API response safety", () => {
     expect(error.code).toBe("PAYMENT_UNKNOWN");
   });
 
+  it("accepts a complete verified paid review from the server after a refresh", async () => {
+    const review = {
+      projectName: "Fictional project",
+      clientName: "Fictional buyer",
+      sandbox: true,
+      document: {
+        id: "doc-1",
+        version: 2,
+        totalCents: 1250,
+        currency: "USD",
+        status: "paid",
+        deliverables: [],
+        exclusions: [],
+        paypalOrderId: "saved-order-1",
+        paypalCaptureId: "verified-capture-1",
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(review)));
+    await expect(scopepayApi.clientReview(CLIENT_TOKEN)).resolves.toEqual(
+      review
+    );
+  });
+
   it("accepts a coherent accepted review without claiming payment", async () => {
     const review = {
       projectName: "Fictional project",

@@ -18,6 +18,7 @@ const testState = vi.hoisted(() => {
       createOrder: vi.fn(),
       captureOrder: vi.fn(),
       reconcileOrder: vi.fn(),
+      clientReview: vi.fn(),
     },
     ScopePayApiError: MockScopePayApiError,
     runtime: null as HookRuntime | null,
@@ -114,6 +115,17 @@ class HookRuntime {
       deps.length !== previous.length ||
       deps.some((value, position) => !Object.is(value, previous[position]));
     if (changed) this.pendingEffects.push({ index, effect, deps });
+  }
+
+  updateProps(next: Record<string, unknown>) {
+    Object.assign(this.props, next);
+    this.flush();
+  }
+
+  unmount() {
+    for (const effect of this.effects) {
+      if (typeof effect?.cleanup === "function") effect.cleanup();
+    }
   }
 
   flush() {
@@ -236,7 +248,10 @@ function installBrowserFakes() {
   return { container, capturedOptions, scripts };
 }
 
-function mount(review = makeReview()) {
+function mount(
+  review = makeReview(),
+  externalError?: { message: string; code: string }
+) {
   const browser = installBrowserFakes();
   const onReview = vi.fn();
   const runtime = new HookRuntime(
@@ -246,6 +261,7 @@ function mount(review = makeReview()) {
       review,
       status: makeStatus(),
       onReview,
+      externalError,
     },
     browser.container
   );
@@ -258,6 +274,7 @@ function resetTestState() {
   testState.api.createOrder.mockReset();
   testState.api.captureOrder.mockReset();
   testState.api.reconcileOrder.mockReset();
+  testState.api.clientReview.mockReset();
   testState.runtime = null;
   delete (globalThis as any).window;
   delete (globalThis as any).document;
@@ -284,7 +301,7 @@ describe("PayPalCheckout payment safety UI", () => {
     expect(specificMessage).toContain(
       "This PayPal Sandbox order is unavailable"
     );
-    expect(specificMessage).toContain("Payments recovery");
+    expect(buttonNamed(runtime.tree, "Check for owner recovery")).toBeDefined();
 
     sdk.onError(new Error("opaque PayPal SDK failure"));
     runtime.flush();
@@ -369,9 +386,7 @@ describe("PayPalCheckout payment safety UI", () => {
     dismiss!.props!.onClick();
     runtime.flush();
 
-    expect(renderedText(runtime.tree)).toContain(
-      "saved Sandbox order cannot be used"
-    );
+    expect(renderedText(runtime.tree)).toContain("Read-only check");
     expect(
       buttonNamed(runtime.tree, "Prepare direct PayPal link")
     ).toBeUndefined();
@@ -434,5 +449,268 @@ describe("PayPalCheckout payment safety UI", () => {
       "Payment recorded by the sandbox"
     );
     expect(renderedText(runtime.tree)).toContain("accepted version and amount");
+  });
+
+  it("gates checkout immediately when a missing-order error came from the direct PayPal return", () => {
+    const { runtime, capturedOptions } = mount(makeReview(), {
+      message: "This PayPal Sandbox order is unavailable.",
+      code: "PAYPAL_ORDER_NOT_FOUND",
+    });
+    expect(capturedOptions).toHaveLength(0);
+    expect(buttonNamed(runtime.tree, "Check for owner recovery")).toBeDefined();
+    expect(
+      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+    ).toBeUndefined();
+    expect(testState.api.clientReview).not.toHaveBeenCalled();
+    expect(testState.api.createOrder).not.toHaveBeenCalled();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+  });
+
+  it("keeps the missing-order gate if the owner has not attached a fresh order", async () => {
+    testState.api.clientReview.mockResolvedValue(makeReview());
+    const { runtime } = mount(makeReview(), {
+      message: "This PayPal Sandbox order is unavailable.",
+      code: "PAYPAL_ORDER_NOT_FOUND",
+    });
+    buttonNamed(runtime.tree, "Check for owner recovery")!.props!.onClick();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    runtime.flush();
+    expect(renderedText(runtime.tree)).toContain(
+      "No fresh owner-recovered order"
+    );
+    expect(
+      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+    ).toBeUndefined();
+    expect(testState.api.reconcileOrder).not.toHaveBeenCalled();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+    expect(testState.api.createOrder).not.toHaveBeenCalled();
+  });
+
+  it("allows continuation only after click-driven GETs match the fresh order to exact accepted terms", async () => {
+    const next = makeReview("accepted", "owner-recovered-order");
+    testState.api.clientReview.mockResolvedValue(next);
+    testState.api.reconcileOrder.mockResolvedValue(next);
+    const { runtime, onReview } = mount(makeReview(), {
+      message: "This PayPal Sandbox order is unavailable.",
+      code: "PAYPAL_ORDER_NOT_FOUND",
+    });
+    const check = buttonNamed(runtime.tree, "Check for owner recovery")!;
+    check.props!.onClick();
+    check.props!.onClick();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    runtime.flush();
+    expect(testState.api.clientReview).toHaveBeenCalledTimes(1);
+    expect(testState.api.reconcileOrder).toHaveBeenCalledWith(
+      "client-token",
+      "owner-recovered-order"
+    );
+    expect(onReview).toHaveBeenCalledWith(next);
+    expect(renderedText(runtime.tree)).toContain("Owner recovery found");
+    expect(
+      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+    ).toBeDefined();
+    expect(testState.api.createOrder).not.toHaveBeenCalled();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+  });
+
+  it.each(["version", "totalCents"] as const)(
+    "keeps checkout locked when recovered review %s changed",
+    async field => {
+      const next = makeReview("accepted", "owner-recovered-order");
+      next.document[field] += 1;
+      testState.api.clientReview.mockResolvedValue(next);
+      const { runtime, onReview } = mount(makeReview(), {
+        message: "This PayPal Sandbox order is unavailable.",
+        code: "PAYPAL_ORDER_NOT_FOUND",
+      });
+      buttonNamed(runtime.tree, "Check for owner recovery")!.props!.onClick();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      runtime.flush();
+      expect(renderedText(runtime.tree)).toContain("terms changed");
+      expect(onReview).not.toHaveBeenCalled();
+      expect(
+        buttonNamed(runtime.tree, "Prepare direct PayPal link")
+      ).toBeUndefined();
+      expect(testState.api.reconcileOrder).not.toHaveBeenCalled();
+      expect(testState.api.captureOrder).not.toHaveBeenCalled();
+    }
+  );
+
+  it("retains the missing-order gate if checking a fresh order hits an uncertain gateway failure", async () => {
+    testState.api.clientReview.mockResolvedValue(
+      makeReview("accepted", "owner-recovered-order")
+    );
+    testState.api.reconcileOrder.mockRejectedValue(
+      new testState.ScopePayApiError(
+        "service temporarily unavailable",
+        502,
+        "SERVICE_UNAVAILABLE"
+      )
+    );
+    const { runtime, onReview } = mount(makeReview(), {
+      message: "This PayPal Sandbox order is unavailable.",
+      code: "PAYPAL_ORDER_NOT_FOUND",
+    });
+    buttonNamed(runtime.tree, "Check for owner recovery")!.props!.onClick();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    runtime.flush();
+    expect(renderedText(runtime.tree)).toContain("payment status is uncertain");
+    expect(
+      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+    ).toBeUndefined();
+    expect(onReview).not.toHaveBeenCalled();
+    expect(testState.api.createOrder).not.toHaveBeenCalled();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+  });
+
+  it("keeps checkout locked if reconciliation of a fresh order remains payment_pending", async () => {
+    testState.api.clientReview.mockResolvedValue(
+      makeReview("accepted", "owner-recovered-order")
+    );
+    testState.api.reconcileOrder.mockResolvedValue(
+      makeReview("payment_pending", "owner-recovered-order")
+    );
+    const { runtime, onReview } = mount(makeReview(), {
+      message: "This PayPal Sandbox order is unavailable.",
+      code: "PAYPAL_ORDER_NOT_FOUND",
+    });
+    buttonNamed(runtime.tree, "Check for owner recovery")!.props!.onClick();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    runtime.flush();
+    expect(renderedText(runtime.tree)).toContain("Payment is pending");
+    expect(
+      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+    ).toBeUndefined();
+    expect(onReview).not.toHaveBeenCalled();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+  });
+
+  it("recognizes an authoritative paid review with GET only and never creates or captures again", async () => {
+    const paid = makeReview("paid");
+    paid.document.paypalCaptureId = "verified-capture-1";
+    testState.api.clientReview.mockResolvedValue(paid);
+    const { runtime, onReview } = mount(makeReview(), {
+      message: "This PayPal Sandbox order is unavailable.",
+      code: "PAYPAL_ORDER_NOT_FOUND",
+    });
+    buttonNamed(runtime.tree, "Check for owner recovery")!.props!.onClick();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    runtime.flush();
+    expect(renderedText(runtime.tree)).toContain(
+      "Payment recorded by the sandbox"
+    );
+    expect(onReview).toHaveBeenCalledWith(paid);
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+    expect(testState.api.createOrder).not.toHaveBeenCalled();
+  });
+});
+
+describe("PayPalCheckout stale SDK instance protection", () => {
+  it("ignores old create/approve/cancel/error callbacks immediately after a missing-order gate", async () => {
+    const { runtime, capturedOptions } = mount();
+    const oldSdk = capturedOptions[0];
+    runtime.updateProps({
+      externalError: {
+        message: "This PayPal Sandbox order is unavailable.",
+        code: "PAYPAL_ORDER_NOT_FOUND",
+      },
+    });
+    await oldSdk.onApprove({ orderID: "old-provider-order" });
+    await expect(oldSdk.createOrder()).rejects.toThrow(
+      "PayPal order preparation failed"
+    );
+    oldSdk.onCancel();
+    oldSdk.onError(new Error("stale SDK callback"));
+    runtime.flush();
+    expect(renderedText(runtime.tree)).toContain(
+      "This PayPal Sandbox order is unavailable"
+    );
+    expect(renderedText(runtime.tree)).not.toContain("stale SDK callback");
+    expect(
+      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+    ).toBeUndefined();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+    expect(testState.api.createOrder).not.toHaveBeenCalled();
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores a stale in-flight capture %s after checkout generation changes",
+    async outcome => {
+      let resolve!: (value: unknown) => void;
+      let reject!: (error: unknown) => void;
+      testState.api.captureOrder.mockReturnValue(
+        new Promise((ok, fail) => {
+          resolve = ok;
+          reject = fail;
+        })
+      );
+      const { runtime, capturedOptions, onReview } = mount();
+      const pending = capturedOptions[0].onApprove({
+        orderID: "old-provider-order",
+      });
+      runtime.updateProps({
+        externalError: {
+          message: "This PayPal Sandbox order is unavailable.",
+          code: "PAYPAL_ORDER_NOT_FOUND",
+        },
+      });
+      if (outcome === "resolve")
+        resolve({
+          status: "paid",
+          orderId: "old-provider-order",
+          captureId: "mock-capture-1",
+          amountCents: 1250,
+          currency: "USD",
+        });
+      else reject(new Error("stale capture failure"));
+      await pending;
+      runtime.flush();
+      expect(onReview).not.toHaveBeenCalled();
+      expect(renderedText(runtime.tree)).toContain(
+        "This PayPal Sandbox order is unavailable"
+      );
+      expect(renderedText(runtime.tree)).not.toContain(
+        "Payment recorded by the sandbox"
+      );
+      expect(renderedText(runtime.tree)).not.toContain("stale capture failure");
+      expect(testState.api.captureOrder).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("does not apply an old prepare-order response after the instance was gated", async () => {
+    let resolve!: (value: unknown) => void;
+    testState.api.createOrder.mockReturnValue(
+      new Promise(ok => {
+        resolve = ok;
+      })
+    );
+    const { runtime, capturedOptions } = mount(makeReview("accepted", ""));
+    const pending = capturedOptions[0].createOrder();
+    runtime.updateProps({
+      externalError: {
+        message: "This PayPal Sandbox order is unavailable.",
+        code: "PAYPAL_ORDER_NOT_FOUND",
+      },
+    });
+    resolve({
+      id: "stale-prepared-order",
+      approvalUrl: "https://www.sandbox.paypal.com/checkoutnow?token=fictional",
+    });
+    await expect(pending).rejects.toThrow("PayPal order preparation failed");
+    runtime.flush();
+    expect(
+      buttonNamed(runtime.tree, "Prepare direct PayPal link")
+    ).toBeUndefined();
+    expect(renderedText(runtime.tree)).not.toContain("stale-prepared-order");
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+  });
+
+  it("ignores callbacks after SDK cleanup on unmount", async () => {
+    const { runtime, capturedOptions } = mount();
+    runtime.unmount();
+    await capturedOptions[0].onApprove({ orderID: "old-provider-order" });
+    await expect(capturedOptions[0].createOrder()).rejects.toThrow();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+    expect(testState.api.createOrder).not.toHaveBeenCalled();
   });
 });

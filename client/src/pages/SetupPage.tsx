@@ -9,6 +9,7 @@ import {
 import type { ServiceStatus } from "@shared/scopepay";
 import { scopepayApi } from "../lib/scopepay-api";
 import { errorMessage, Logo } from "../components/scopepay/shared";
+import { SandboxRecoveryGuide } from "../components/scopepay/SandboxRecoveryGuide";
 
 export function SetupPage() {
   const [status, setStatus] = useState<ServiceStatus | null>(null);
@@ -63,7 +64,7 @@ export function SetupPage() {
                 ready={status.paypalConfigured}
                 detail={
                   status.paypalConfigured
-                    ? "Sandbox merchant · USD · capture enabled"
+                    ? "Sandbox credentials configured · USD. Readiness is not proof of a completed payment."
                     : "Add sandbox credentials to unlock the client checkout. No simulated success is shown."
                 }
               />
@@ -79,6 +80,7 @@ export function SetupPage() {
             </div>
           )
         )}
+        <SandboxRecoveryGuide />
         <div className="setup-notice">
           <Info size={18} />
           <div>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useLocation } from "wouter";
 import {
   Activity,
@@ -434,14 +434,26 @@ export function PaymentsPanel({
   const [recoveryError, setRecoveryError] = useState<Record<string, string>>(
     {}
   );
+  const [recoveryStopped, setRecoveryStopped] = useState<
+    Record<string, boolean>
+  >({});
   const [approvalLinks, setApprovalLinks] = useState<Record<string, string>>(
     {}
   );
   const [reissuedLinks, setReissuedLinks] = useState<Record<string, boolean>>(
     {}
   );
+  const recoveryInFlight = useRef(new Set<string>());
   const recover = async (document: ScopeDocument) => {
-    if (!confirmed[document.id]) return;
+    const recoveryKey = `${document.id}:${document.version}`;
+    if (
+      !confirmed[document.id] ||
+      recoveryInFlight.current.has(recoveryKey) ||
+      reissuedLinks[document.id] ||
+      recoveryStopped[document.id]
+    )
+      return;
+    recoveryInFlight.current.add(recoveryKey);
     setReissuingId(document.id);
     setRecoveryError(current => ({ ...current, [document.id]: "" }));
     try {
@@ -461,18 +473,21 @@ export function PaymentsPanel({
         setRecoveryError(current => ({
           ...current,
           [document.id]:
-            "The order was prepared, but no valid Sandbox approval URL was returned. Use the fresh review link below to continue; do not create another replacement.",
+            "The replacement order was prepared, but no valid Sandbox approval URL was returned. Use the fresh same-version review link below to continue; do not create another replacement.",
         }));
     } catch (error) {
       setRecoveryError(current => ({
         ...current,
         [document.id]:
           error instanceof ScopePayApiError
-            ? errorMessage(error)
-            : "Recovery could not be completed. The server did not create a replacement order.",
+            ? `${errorMessage(error)} Recovery is paused. Reload this page and check merchant Activity and the ledger before another attempt.`
+            : "Recovery status is unknown. Stop—do not create another replacement order. Reload the workspace and check Sandbox Activity using the configured Sandbox Business merchant before continuing.",
       }));
+      setRecoveryStopped(current => ({ ...current, [document.id]: true }));
     } finally {
+      recoveryInFlight.current.delete(recoveryKey);
       setReissuingId(null);
+      setConfirmed(current => ({ ...current, [document.id]: false }));
     }
   };
   return (
@@ -505,6 +520,8 @@ export function PaymentsPanel({
             Boolean(document.paypalOrderId) &&
             !document.paypalCaptureId;
           const recoveryOpen = recoveryDocumentId === document.id;
+          const recoverySucceeded = Boolean(reissuedLinks[document.id]);
+          const recoveryIsStopped = Boolean(recoveryStopped[document.id]);
           return (
             <div className="payment-row" key={document.id}>
               <div>
@@ -551,16 +568,54 @@ export function PaymentsPanel({
                       className="payment-recovery"
                     >
                       <p>
-                        Create a new PayPal Sandbox order for this exact version
-                        and amount. This action does not capture payment. It
-                        leaves the accepted terms and existing same-version
-                        review link active; share the additional fresh link for
-                        PayPal's return to ScopePay.
+                        Recovery is for this exact accepted record only. It does
+                        not capture payment, charge a buyer, or change the
+                        accepted terms.
                       </p>
+                      <p>
+                        <strong>
+                          Recover: {document.title} · Version {document.version}{" "}
+                          · {formatMoney(document.totalCents)}
+                        </strong>
+                      </p>
+                      <p>
+                        <strong>
+                          1. Check the configured Sandbox merchant first.
+                        </strong>
+                      </p>
+                      <ol>
+                        <li>
+                          Sign in safely at{" "}
+                          <a
+                            href="https://www.sandbox.paypal.com/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            referrerPolicy="no-referrer"
+                          >
+                            PayPal Sandbox
+                          </a>{" "}
+                          with the configured Sandbox Business merchant account,
+                          not the Personal Sandbox buyer account.
+                        </li>
+                        <li>
+                          Open Activity and look for this exact record:{" "}
+                          <strong>
+                            {formatMoney(document.totalCents)} · Version{" "}
+                            {document.version}
+                          </strong>
+                          .
+                        </li>
+                        <li>
+                          If Activity shows the record as completed, pending, or
+                          unknown, stop. Do not create a replacement; refresh
+                          this workspace and verify the provider status first.
+                        </li>
+                      </ol>
                       <label className="recovery-check">
                         <input
                           type="checkbox"
                           checked={Boolean(confirmed[document.id])}
+                          disabled={recoverySucceeded || recoveryIsStopped}
                           onChange={event =>
                             setConfirmed(current => ({
                               ...current,
@@ -569,13 +624,19 @@ export function PaymentsPanel({
                           }
                         />
                         <span>
-                          I confirmed no payment was completed in PayPal Sandbox
+                          <strong>Required confirmation:</strong> I checked the
+                          configured Sandbox Business merchant Activity and
+                          confirmed that this exact record has no completed,
+                          pending, or unknown payment.
                         </span>
                       </label>
                       <button
                         className="primary-button recovery-button"
                         disabled={
-                          !confirmed[document.id] || reissuingId === document.id
+                          !confirmed[document.id] ||
+                          reissuingId === document.id ||
+                          recoverySucceeded ||
+                          recoveryIsStopped
                         }
                         onClick={() => void recover(document)}
                       >
@@ -584,11 +645,29 @@ export function PaymentsPanel({
                         ) : null}
                         {reissuingId === document.id
                           ? "Preparing new Sandbox order…"
-                          : "Create replacement Sandbox order"}
+                          : recoverySucceeded
+                            ? "Replacement already prepared"
+                            : "Create replacement Sandbox order"}
                       </button>
                       {recoveryError[document.id] && (
                         <div className="inline-message error">
                           <span>{recoveryError[document.id]}</span>
+                        </div>
+                      )}
+                      {recoveryIsStopped && (
+                        <p role="status">
+                          Recovery is paused. Reload this page, check the ledger
+                          and merchant Sandbox Activity, and do not create
+                          another attempt while status is uncertain.
+                        </p>
+                      )}
+                      {recoverySucceeded && (
+                        <div className="inline-message">
+                          <span>
+                            Replacement Sandbox order prepared. It is not paid:
+                            ScopePay must verify the provider capture before any
+                            payment is recorded.
+                          </span>
                         </div>
                       )}
                       {approvalLinks[document.id] && (
@@ -602,12 +681,14 @@ export function PaymentsPanel({
                           Continue to PayPal <ExternalLink size={14} />
                         </a>
                       )}
-                      {reissuedLinks[document.id] && document.clientToken && (
+                      {recoverySucceeded && (
                         <div className="recovery-client-link">
                           <p>
-                            The accepted scope and amount did not change. Copy
-                            and send this fresh continuation link; the existing
-                            same-version buyer link remains active.
+                            Next: send the fresh same-version
+                            review/continuation link below to the buyer. The
+                            buyer must approve it with the Personal Sandbox
+                            buyer account. Payment is complete only after the
+                            provider capture is verified by ScopePay.
                           </p>
                           <ShareLink
                             token={document.clientToken}

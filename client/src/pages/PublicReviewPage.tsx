@@ -12,7 +12,7 @@ import type {
   PaymentResult,
   ServiceStatus,
 } from "@shared/scopepay";
-import { scopepayApi } from "../lib/scopepay-api";
+import { ScopePayApiError, scopepayApi } from "../lib/scopepay-api";
 import { PayPalCheckout } from "../components/scopepay/PayPalCheckout";
 import {
   errorMessage,
@@ -30,6 +30,10 @@ export function PublicReviewPage({ token }: { token: string }) {
   const [error, setError] = useState("");
   const [paypalNotice, setPaypalNotice] = useState("");
   const [paypalNoticeError, setPaypalNoticeError] = useState(false);
+  const [checkoutIssue, setCheckoutIssue] = useState<{
+    message: string;
+    code?: string;
+  } | null>(null);
   const handledPaypalQuery = useRef("");
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,6 +101,15 @@ export function PublicReviewPage({ token }: { token: string }) {
     void scopepayApi
       .captureOrder(token, providerOrderId)
       .then((result: PaymentResult) => {
+        if (
+          result.amountCents !== review.document.totalCents ||
+          result.currency !== review.document.currency
+        )
+          throw new ScopePayApiError(
+            "Payment did not match the accepted amount.",
+            409,
+            "PAYMENT_MISMATCH"
+          );
         setReview(current =>
           current
             ? {
@@ -112,10 +125,16 @@ export function PublicReviewPage({ token }: { token: string }) {
             : current
         );
         setPaypalNotice("");
+        setCheckoutIssue(null);
       })
       .catch(err => {
-        setPaypalNotice(errorMessage(err));
+        const message = errorMessage(err);
+        setPaypalNotice(message);
         setPaypalNoticeError(true);
+        setCheckoutIssue({
+          message,
+          code: err instanceof ScopePayApiError ? err.code : "PAYMENT_UNKNOWN",
+        });
       });
   }, [review, token]);
   const accept = async () => {
@@ -130,6 +149,17 @@ export function PublicReviewPage({ token }: { token: string }) {
       setError(errorMessage(err));
     } finally {
       setAccepting(false);
+    }
+  };
+  const updateCheckoutReview = (next: ClientReview) => {
+    setReview(next);
+    if (
+      next.document.status === "paid" ||
+      (next.document.paypalOrderId &&
+        next.document.paypalOrderId !== review?.document.paypalOrderId)
+    ) {
+      setCheckoutIssue(null);
+      setPaypalNotice("");
     }
   };
   if (loading)
@@ -233,7 +263,7 @@ export function PublicReviewPage({ token }: { token: string }) {
               <strong>{formatMoneyExact(document.totalCents)}</strong>
               <small>Server-calculated · Version {document.version}</small>
             </div>
-            {paypalNotice && (
+            {paypalNotice && !checkoutIssue && (
               <div
                 className={`inline-message${paypalNoticeError ? " error" : ""}`}
               >
@@ -283,7 +313,8 @@ export function PublicReviewPage({ token }: { token: string }) {
                 token={token}
                 review={review}
                 status={status}
-                onReview={setReview}
+                onReview={updateCheckoutReview}
+                externalError={checkoutIssue}
               />
             ) : (
               <div className="checkout-disabled">

@@ -16,6 +16,7 @@ import type {
 import { ScopePayApiError, scopepayApi } from "../../lib/scopepay-api";
 import { safeSandboxApprovalUrl } from "../../lib/paypal-safety";
 import { errorMessage, formatMoney } from "./shared";
+import { SandboxRecoveryGuide } from "./SandboxRecoveryGuide";
 
 const PAYPAL_LOG_PREFIX = "[ScopePay PayPal]";
 const SAFE_API_CODES = new Set([
@@ -186,11 +187,13 @@ export function PayPalCheckout({
   review,
   status,
   onReview,
+  externalError,
 }: {
   token: string;
   review: ClientReview;
   status: ServiceStatus | null;
   onReview: (review: ClientReview) => void;
+  externalError?: { message: string; code?: string } | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [sdkReady, setSdkReady] = useState(false);
@@ -198,13 +201,20 @@ export function PayPalCheckout({
   const [paymentState, setPaymentState] = useState<
     "idle" | "creating" | "capturing" | "recovering" | "paid" | "error"
   >("idle");
-  const [paymentError, setPaymentError] = useState("");
-  const [paymentErrorCode, setPaymentErrorCode] = useState<string>();
+  const [paymentError, setPaymentError] = useState(
+    externalError?.message ?? ""
+  );
+  const [paymentErrorCode, setPaymentErrorCode] = useState<string | undefined>(
+    externalError?.code
+  );
+  const [recoveryNotice, setRecoveryNotice] = useState("");
   const [orderId, setOrderId] = useState(review.document.paypalOrderId ?? "");
   const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
   const paymentErrorRef = useRef("");
   const orderIdRef = useRef(orderId);
   const verifiedPaidRef = useRef(review.document.status === "paid");
+  const recoveryCheckRef = useRef(false);
+  const sdkGenerationRef = useRef(0);
   const orderUnavailable =
     paymentErrorCode === "PAYPAL_ORDER_NOT_FOUND" ||
     paymentErrorCode === "ORDER_NOT_FOUND";
@@ -221,6 +231,21 @@ export function PayPalCheckout({
   useEffect(() => {
     if (review.document.status === "paid") verifiedPaidRef.current = true;
   }, [review.document.status]);
+
+  // A missing-order error on the direct PayPal return must gate SDK checkout
+  // too, rather than remaining a disconnected notice above working buttons.
+  useEffect(() => {
+    if (!externalError || verifiedPaidRef.current) return;
+    if (
+      externalError.code === "PAYPAL_ORDER_NOT_FOUND" ||
+      externalError.code === "ORDER_NOT_FOUND"
+    )
+      sdkGenerationRef.current += 1;
+    paymentErrorRef.current = externalError.message;
+    setPaymentError(externalError.message);
+    setPaymentErrorCode(externalError.code);
+    setPaymentState("error");
+  }, [externalError?.message, externalError?.code]);
 
   useEffect(() => {
     if (
@@ -260,6 +285,8 @@ export function PayPalCheckout({
   };
 
   const showPaymentError = (message: string, code?: string) => {
+    if (code === "PAYPAL_ORDER_NOT_FOUND" || code === "ORDER_NOT_FOUND")
+      sdkGenerationRef.current += 1;
     paymentErrorRef.current = message;
     setPaymentError(message);
     setPaymentErrorCode(code);
@@ -271,7 +298,8 @@ export function PayPalCheckout({
     // Dismissing text does not remove a server-verified missing-order gate.
   };
 
-  const prepareOrder = async () => {
+  const prepareOrder = async (isCurrent: () => boolean = () => true) => {
+    if (!isCurrent() || verifiedPaidRef.current) return null;
     setPaymentState("creating");
     clearPaymentError();
     setApprovalUrl(null);
@@ -280,6 +308,7 @@ export function PayPalCheckout({
         token,
         review.document.version
       );
+      if (!isCurrent() || verifiedPaidRef.current) return null;
       setOrderId(result.id);
       orderIdRef.current = result.id;
       const safeUrl = safeSandboxApprovalUrl(result.approvalUrl);
@@ -291,6 +320,7 @@ export function PayPalCheckout({
       setPaymentState("idle");
       return result;
     } catch (error) {
+      if (!isCurrent() || verifiedPaidRef.current) return null;
       setPaymentState("error");
       showPaymentError(errorMessage(error), errorCode(error));
       return null;
@@ -315,8 +345,10 @@ export function PayPalCheckout({
 
   const capture = async (
     id: string,
-    traceId = createTraceId()
+    traceId = createTraceId(),
+    isCurrent: () => boolean = () => true
   ): Promise<{ success: boolean; error?: unknown }> => {
+    if (!isCurrent() || verifiedPaidRef.current) return { success: false };
     const startedAt = nowMs();
     const captureFields = {
       traceId,
@@ -333,6 +365,7 @@ export function PayPalCheckout({
     });
     try {
       const result = await scopepayApi.captureOrder(token, id, traceId);
+      if (!isCurrent()) return { success: false };
       if (
         result.amountCents !== review.document.totalCents ||
         result.currency !== review.document.currency
@@ -356,6 +389,7 @@ export function PayPalCheckout({
       });
       return { success: true };
     } catch (error) {
+      if (!isCurrent() || verifiedPaidRef.current) return { success: false };
       setPaymentState("error");
       showPaymentError(errorMessage(error), errorCode(error));
       logPayPal("error", "capture.failed", {
@@ -392,6 +426,108 @@ export function PayPalCheckout({
     }
   };
 
+  const checkOwnerRecovery = async () => {
+    if (recoveryCheckRef.current) return;
+    recoveryCheckRef.current = true;
+    setPaymentState("recovering");
+    setRecoveryNotice("");
+    // Keep the known missing-order gate while these GETs run or fail.
+    const unavailableCode = paymentErrorCode;
+    try {
+      let latest = await scopepayApi.clientReview(token);
+      const expected = review.document;
+      const sameTerms = (next: ClientReview) =>
+        next.document.id === expected.id &&
+        next.document.version === expected.version &&
+        next.document.totalCents === expected.totalCents &&
+        next.document.currency === expected.currency;
+      if (!sameTerms(latest)) {
+        setRecoveryNotice(
+          "This review's terms changed. Stop and review the owner's latest document; checkout has not been unlocked."
+        );
+        setPaymentState("error");
+        return;
+      }
+      const nextOrderId = latest.document.paypalOrderId;
+      if (latest.document.status !== "paid") {
+        if (!nextOrderId || nextOrderId === orderIdRef.current) {
+          setRecoveryNotice(
+            "No fresh owner-recovered order is available on this review yet. Ask the owner to complete the steps below. Do not retry the unavailable order."
+          );
+          setPaymentState("error");
+          return;
+        }
+        // Verify the freshly attached order by GET before allowing continuation.
+        latest = await scopepayApi.reconcileOrder(token, nextOrderId);
+        if (
+          !sameTerms(latest) ||
+          latest.document.paypalOrderId !== nextOrderId
+        ) {
+          setRecoveryNotice(
+            "The recovered order could not be matched to these exact terms. Stop and ask the owner to verify the ledger."
+          );
+          setPaymentState("error");
+          return;
+        }
+      }
+      if (
+        latest.document.status !== "accepted" &&
+        latest.document.status !== "paid"
+      ) {
+        setRecoveryNotice(
+          "Payment is pending or the review is not ready. Do not create another attempt; ask the owner to verify merchant Activity and the ledger."
+        );
+        setPaymentState("error");
+        return;
+      }
+      setOrderId(latest.document.paypalOrderId ?? "");
+      orderIdRef.current = latest.document.paypalOrderId ?? "";
+      setApprovalUrl(null);
+      if (latest.document.status === "paid") verifiedPaidRef.current = true;
+      onReview(latest);
+      clearPaymentError();
+      setPaymentState(latest.document.status === "paid" ? "paid" : "idle");
+      setRecoveryNotice(
+        "Owner recovery found. The accepted version and amount are unchanged. Continue using PayPal checkout below; payment is not yet recorded."
+      );
+    } catch (error) {
+      // Gateway/transport failure is uncertain, never permission to replace.
+      setRecoveryNotice(errorMessage(error));
+      setPaymentErrorCode(unavailableCode);
+      setPaymentState("error");
+    } finally {
+      recoveryCheckRef.current = false;
+    }
+  };
+
+  const recoveryGuide = (
+    <>
+      <SandboxRecoveryGuide
+        version={review.document.version}
+        totalCents={review.document.totalCents}
+        unavailable
+      />
+      {recoveryNotice && (
+        <p className="recovery-check-status" role="status">
+          {recoveryNotice}
+        </p>
+      )}
+      <button
+        className="secondary-button full-button"
+        disabled={paymentState === "recovering" || paymentState === "capturing"}
+        onClick={() => void checkOwnerRecovery()}
+      >
+        <RefreshCw size={15} />
+        {paymentState === "recovering"
+          ? "Checking owner recovery…"
+          : "Check for owner recovery"}
+      </button>
+      <small className="checkout-footnote">
+        Read-only check. This action never creates an order or captures payment.
+      </small>
+    </>
+  );
+
   useEffect(() => {
     if (
       !sdkReady ||
@@ -402,6 +538,8 @@ export function PayPalCheckout({
     )
       return;
     containerRef.current.innerHTML = "";
+    const generation = ++sdkGenerationRef.current;
+    const isCurrent = () => sdkGenerationRef.current === generation;
     const buttons = window.paypal.Buttons({
       style: {
         layout: "vertical",
@@ -411,11 +549,12 @@ export function PayPalCheckout({
         height: 42,
       },
       createOrder: async () => {
-        const result = await prepareOrder();
+        const result = await prepareOrder(isCurrent);
         if (!result) throw new Error("PayPal order preparation failed");
         return result.id;
       },
       onApprove: async (data: { orderID: string }) => {
+        if (!isCurrent() || verifiedPaidRef.current) return;
         const traceId = createTraceId();
         const startedAt = nowMs();
         const approveFields = {
@@ -429,7 +568,8 @@ export function PayPalCheckout({
           ...approveFields,
           elapsedMs: elapsedMs(startedAt),
         });
-        const outcome = await capture(data.orderID, traceId);
+        const outcome = await capture(data.orderID, traceId, isCurrent);
+        if (!isCurrent()) return;
         logPayPal(outcome.success ? "info" : "error", "onApprove.complete", {
           ...approveFields,
           success: outcome.success,
@@ -438,14 +578,14 @@ export function PayPalCheckout({
         });
       },
       onCancel: () => {
-        if (verifiedPaidRef.current) return;
+        if (!isCurrent() || verifiedPaidRef.current) return;
         setPaymentState("idle");
         showPaymentError(
           "Checkout was cancelled. No capture was recorded; your order remains available."
         );
       },
       onError: error => {
-        if (verifiedPaidRef.current) return;
+        if (!isCurrent() || verifiedPaidRef.current) return;
         logPayPal("warn", "sdk.error", {
           scopeVersion: review.document.version,
           amountCents: review.document.totalCents,
@@ -460,14 +600,14 @@ export function PayPalCheckout({
           );
       },
     });
-    buttons
-      .render(containerRef.current)
-      .catch(() =>
-        setSdkError(
-          "PayPal checkout could not start. You can still prepare a direct Sandbox link below, or ask the workspace owner to verify Sandbox setup."
-        )
+    buttons.render(containerRef.current).catch(() => {
+      if (!isCurrent() || verifiedPaidRef.current) return;
+      setSdkError(
+        "PayPal checkout could not start. You can still prepare a direct Sandbox link below, or ask the workspace owner to verify Sandbox setup."
       );
+    });
     return () => {
+      if (isCurrent()) sdkGenerationRef.current += 1;
       try {
         void buttons.close?.().catch(() => {});
       } catch {
@@ -519,25 +659,23 @@ export function PayPalCheckout({
           </div>
         )}
         {orderUnavailable && (
-          <p className="action-note recovery-instruction">
-            Ask the workspace owner to check PayPal Sandbox Activity and use the
-            Payments panel recovery. Do not retry capture for this missing
-            order.
-          </p>
+          <div className="recovery-instruction">{recoveryGuide}</div>
         )}
         <div className="editor-actions">
-          <button
-            className="secondary-button"
-            disabled={paymentState === "recovering" || !orderId}
-            onClick={verify}
-          >
-            {paymentState === "recovering" ? (
-              <LoaderCircle className="spin" size={15} />
-            ) : (
-              <RefreshCw size={15} />
-            )}
-            {paymentState === "recovering" ? "Verifying…" : "Verify payment"}
-          </button>
+          {!orderUnavailable && (
+            <button
+              className="secondary-button"
+              disabled={paymentState === "recovering" || !orderId}
+              onClick={verify}
+            >
+              {paymentState === "recovering" ? (
+                <LoaderCircle className="spin" size={15} />
+              ) : (
+                <RefreshCw size={15} />
+              )}
+              {paymentState === "recovering" ? "Verifying…" : "Verify payment"}
+            </button>
+          )}
           {!orderUnavailable && (
             <button
               className="primary-button"
@@ -628,10 +766,7 @@ export function PayPalCheckout({
         </div>
       )}
       {orderUnavailable ? (
-        <p className="action-note recovery-instruction">
-          This saved Sandbox order cannot be used. Do not retry it; ask the
-          workspace owner to check Sandbox Activity and use Payments recovery.
-        </p>
+        <div className="recovery-instruction">{recoveryGuide}</div>
       ) : (
         <>
           <div
@@ -713,6 +848,20 @@ export function PayPalCheckout({
               : "Verify this same order"}
           </button>
         </div>
+      )}
+      {!orderUnavailable && recoveryNotice && (
+        <p className="recovery-check-status" role="status">
+          {recoveryNotice}
+        </p>
+      )}
+      {!orderUnavailable && (
+        <details className="checkout-help">
+          <summary>Need help with Sandbox checkout?</summary>
+          <SandboxRecoveryGuide
+            version={review.document.version}
+            totalCents={review.document.totalCents}
+          />
+        </details>
       )}
       <small className="checkout-footnote">
         ScopePay records payment only after the server verifies a completed

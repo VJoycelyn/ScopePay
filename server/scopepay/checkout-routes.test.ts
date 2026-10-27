@@ -582,6 +582,51 @@ describe("ScopePay accepted-version checkout routes", () => {
     expect(documentFromState().status).toBe("paid");
   });
 
+  it.each(["quote", "change"] as const)(
+    "reloads a verified paid %s review with capture proof, without another capture or private fields",
+    async kind => {
+      mocks.reset(kind);
+      const order = mocks.seedOrder({ paypal_order_id: "paypal-paid-review" });
+      mocks.state.providers.set(
+        "paypal-paid-review",
+        mocks.providerPayload(
+          "paypal-paid-review",
+          "COMPLETED",
+          order.document_id,
+          order.document_version,
+          order.amount_cents,
+          "COMPLETED",
+          "capture-paid-review"
+        )
+      );
+      const reconciled = await fetch(
+        `${baseUrl}/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}`
+      );
+      expect(reconciled.status).toBe(200);
+      const first = await reconciled.json();
+      expect(first.document).toMatchObject({
+        status: "paid",
+        paypalOrderId: "paypal-paid-review",
+        paypalCaptureId: "capture-paid-review",
+      });
+      const reloaded = await fetch(
+        `${baseUrl}/api/scopepay/client/${CLIENT_TOKEN}`
+      );
+      expect(reloaded.status).toBe(200);
+      const next = await reloaded.json();
+      expect(next.document).toMatchObject({
+        status: "paid",
+        paypalOrderId: "paypal-paid-review",
+        paypalCaptureId: "capture-paid-review",
+      });
+      expect(next.document.clientToken).toBeUndefined();
+      expect(next.audit).toBeUndefined();
+      expect(next.brief).toBeUndefined();
+      expect(mocks.state.captureCalls).toHaveLength(0);
+      expect(mocks.state.createCalls).toHaveLength(0);
+    }
+  );
+
   it.each([
     ["PENDING", "PAYMENT_PENDING"],
     ["UNKNOWN", "PAYMENT_UNKNOWN"],
