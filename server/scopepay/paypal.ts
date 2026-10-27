@@ -34,7 +34,11 @@ async function paypalFetch(
       string,
       unknown
     >;
-    if (response.status === 404 && payload.name === "INVALID_RESOURCE_ID")
+    if (
+      response.status === 404 &&
+      (payload.name === "INVALID_RESOURCE_ID" ||
+        payload.name === "RESOURCE_NOT_FOUND")
+    )
       throw new Error("PAYPAL_ORDER_NOT_FOUND");
     if (!response.ok) throw new Error("PAYPAL_PROVIDER_REJECTED");
     return payload;

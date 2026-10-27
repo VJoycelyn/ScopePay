@@ -173,7 +173,10 @@ declare global {
         onApprove: (data: { orderID: string }) => Promise<void>;
         onCancel: () => void;
         onError: (error: unknown) => void;
-      }) => { render: (container: HTMLElement) => Promise<void> };
+      }) => {
+        render: (container: HTMLElement) => Promise<void>;
+        close?: () => Promise<void>;
+      };
     };
   }
 }
@@ -199,11 +202,25 @@ export function PayPalCheckout({
   const [paymentErrorCode, setPaymentErrorCode] = useState<string>();
   const [orderId, setOrderId] = useState(review.document.paypalOrderId ?? "");
   const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
+  const paymentErrorRef = useRef("");
+  const orderIdRef = useRef(orderId);
+  const verifiedPaidRef = useRef(review.document.status === "paid");
+  const orderUnavailable =
+    paymentErrorCode === "PAYPAL_ORDER_NOT_FOUND" ||
+    paymentErrorCode === "ORDER_NOT_FOUND";
 
   useEffect(() => {
     if (review.document.paypalOrderId)
       setOrderId(review.document.paypalOrderId);
   }, [review.document.paypalOrderId]);
+
+  useEffect(() => {
+    orderIdRef.current = orderId;
+  }, [orderId]);
+
+  useEffect(() => {
+    if (review.document.status === "paid") verifiedPaidRef.current = true;
+  }, [review.document.status]);
 
   useEffect(() => {
     if (
@@ -237,8 +254,21 @@ export function PayPalCheckout({
   ]);
 
   const clearPaymentError = () => {
+    paymentErrorRef.current = "";
     setPaymentError("");
     setPaymentErrorCode(undefined);
+  };
+
+  const showPaymentError = (message: string, code?: string) => {
+    paymentErrorRef.current = message;
+    setPaymentError(message);
+    setPaymentErrorCode(code);
+  };
+
+  const dismissPaymentError = () => {
+    paymentErrorRef.current = "";
+    setPaymentError("");
+    // Dismissing text does not remove a server-verified missing-order gate.
   };
 
   const prepareOrder = async () => {
@@ -251,23 +281,24 @@ export function PayPalCheckout({
         review.document.version
       );
       setOrderId(result.id);
+      orderIdRef.current = result.id;
       const safeUrl = safeSandboxApprovalUrl(result.approvalUrl);
       setApprovalUrl(safeUrl);
       if (!safeUrl)
-        setPaymentError(
+        showPaymentError(
           "The server prepared the PayPal order but did not return a usable approval link. Try the PayPal button or ask the workspace owner to verify Sandbox setup."
         );
       setPaymentState("idle");
       return result;
     } catch (error) {
       setPaymentState("error");
-      setPaymentError(errorMessage(error));
-      setPaymentErrorCode(errorCode(error));
+      showPaymentError(errorMessage(error), errorCode(error));
       return null;
     }
   };
 
   const applyPaidResult = (result: PaymentResult): void => {
+    verifiedPaidRef.current = true;
     setOrderId(result.orderId);
     onReview({
       ...review,
@@ -302,6 +333,15 @@ export function PayPalCheckout({
     });
     try {
       const result = await scopepayApi.captureOrder(token, id, traceId);
+      if (
+        result.amountCents !== review.document.totalCents ||
+        result.currency !== review.document.currency
+      )
+        throw new ScopePayApiError(
+          "Payment did not match the accepted amount.",
+          409,
+          "PAYMENT_MISMATCH"
+        );
       logPayPal("info", "capture.response", {
         ...captureFields,
         success: result.status === "paid",
@@ -317,8 +357,7 @@ export function PayPalCheckout({
       return { success: true };
     } catch (error) {
       setPaymentState("error");
-      setPaymentError(errorMessage(error));
-      setPaymentErrorCode(errorCode(error));
+      showPaymentError(errorMessage(error), errorCode(error));
       logPayPal("error", "capture.failed", {
         ...captureFields,
         success: false,
@@ -331,26 +370,25 @@ export function PayPalCheckout({
 
   const verify = async () => {
     if (!orderId) {
-      setPaymentError(
+      showPaymentError(
         "No saved PayPal order is available yet. Ask the workspace owner to check PayPal Sandbox Activity and use Payments panel recovery."
       );
-      setPaymentErrorCode("PAYPAL_ORDER_NOT_FOUND");
       return;
     }
     setPaymentState("recovering");
     clearPaymentError();
     try {
       const latest = await scopepayApi.reconcileOrder(token, orderId);
+      if (latest.document.status === "paid") verifiedPaidRef.current = true;
       onReview(latest);
       setPaymentState(latest.document.status === "paid" ? "paid" : "error");
       if (latest.document.status !== "paid")
-        setPaymentError(
+        showPaymentError(
           "Payment is not confirmed yet. The server remains authoritative; do not create a replacement while this order is pending."
         );
     } catch (error) {
       setPaymentState("error");
-      setPaymentError(errorMessage(error));
-      setPaymentErrorCode(errorCode(error));
+      showPaymentError(errorMessage(error), errorCode(error));
     }
   };
 
@@ -359,66 +397,92 @@ export function PayPalCheckout({
       !sdkReady ||
       !containerRef.current ||
       !window.paypal ||
+      orderUnavailable ||
       review.document.status !== "accepted"
     )
       return;
     containerRef.current.innerHTML = "";
-    window.paypal
-      .Buttons({
-        style: {
-          layout: "vertical",
-          shape: "rect",
-          label: "paypal",
-          color: "blue",
-          height: 42,
-        },
-        createOrder: async () => {
-          const result = await prepareOrder();
-          if (!result) throw new Error("PayPal order preparation failed");
-          return result.id;
-        },
-        onApprove: async (data: { orderID: string }) => {
-          const traceId = createTraceId();
-          const startedAt = nowMs();
-          const approveFields = {
-            traceId,
-            scopeVersion: review.document.version,
-            amountCents: review.document.totalCents,
-            currency: review.document.currency,
-            orderIdPresent: Boolean(data.orderID),
-          };
-          logPayPal("info", "onApprove.enter", {
-            ...approveFields,
-            elapsedMs: elapsedMs(startedAt),
-          });
-          const outcome = await capture(data.orderID, traceId);
-          logPayPal(outcome.success ? "info" : "error", "onApprove.complete", {
-            ...approveFields,
-            success: outcome.success,
-            elapsedMs: elapsedMs(startedAt),
-            ...(outcome.error ? errorDiagnostics(outcome.error) : {}),
-          });
-        },
-        onCancel: () => {
-          setPaymentState("idle");
-          setPaymentError(
-            "Checkout was cancelled. No capture was recorded; your order remains available."
+    const buttons = window.paypal.Buttons({
+      style: {
+        layout: "vertical",
+        shape: "rect",
+        label: "paypal",
+        color: "blue",
+        height: 42,
+      },
+      createOrder: async () => {
+        const result = await prepareOrder();
+        if (!result) throw new Error("PayPal order preparation failed");
+        return result.id;
+      },
+      onApprove: async (data: { orderID: string }) => {
+        const traceId = createTraceId();
+        const startedAt = nowMs();
+        const approveFields = {
+          traceId,
+          scopeVersion: review.document.version,
+          amountCents: review.document.totalCents,
+          currency: review.document.currency,
+          orderIdPresent: Boolean(data.orderID),
+        };
+        logPayPal("info", "onApprove.enter", {
+          ...approveFields,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        const outcome = await capture(data.orderID, traceId);
+        logPayPal(outcome.success ? "info" : "error", "onApprove.complete", {
+          ...approveFields,
+          success: outcome.success,
+          elapsedMs: elapsedMs(startedAt),
+          ...(outcome.error ? errorDiagnostics(outcome.error) : {}),
+        });
+      },
+      onCancel: () => {
+        if (verifiedPaidRef.current) return;
+        setPaymentState("idle");
+        showPaymentError(
+          "Checkout was cancelled. No capture was recorded; your order remains available."
+        );
+      },
+      onError: error => {
+        if (verifiedPaidRef.current) return;
+        logPayPal("warn", "sdk.error", {
+          scopeVersion: review.document.version,
+          amountCents: review.document.totalCents,
+          currency: review.document.currency,
+          orderIdPresent: Boolean(orderIdRef.current),
+          ...errorDiagnostics(error),
+        });
+        setPaymentState("error");
+        if (!paymentErrorRef.current)
+          showPaymentError(
+            "PayPal could not finish this checkout. ScopePay has not verified a completed capture. Verify this same order before retrying; if the popup did not continue, use the direct PayPal link below."
           );
-        },
-        onError: () => {
-          setPaymentState("error");
-          setPaymentError(
-            "PayPal checkout could not complete. No payment was recorded; verify the order before trying again."
-          );
-        },
-      })
+      },
+    });
+    buttons
       .render(containerRef.current)
       .catch(() =>
         setSdkError(
           "PayPal checkout could not start. You can still prepare a direct Sandbox link below, or ask the workspace owner to verify Sandbox setup."
         )
       );
-  }, [sdkReady, token, review.document.version, review.document.status]);
+    return () => {
+      try {
+        void buttons.close?.().catch(() => {});
+      } catch {
+        // A failed SDK cleanup must not affect saved payment state.
+      }
+    };
+  }, [
+    sdkReady,
+    token,
+    review.document.version,
+    review.document.status,
+    review.document.totalCents,
+    review.document.currency,
+    orderUnavailable,
+  ]);
 
   if (review.document.status === "paid" || paymentState === "paid")
     return (
@@ -431,13 +495,7 @@ export function PayPalCheckout({
       </div>
     );
 
-  if (
-    review.document.status === "payment_pending" ||
-    paymentState === "recovering"
-  ) {
-    const orderUnavailable =
-      paymentErrorCode === "PAYPAL_ORDER_NOT_FOUND" ||
-      paymentErrorCode === "ORDER_NOT_FOUND";
+  if (review.document.status === "payment_pending") {
     return (
       <div className="checkout-box">
         <div className="checkout-head">
@@ -455,7 +513,7 @@ export function PayPalCheckout({
           <div className="inline-message error">
             <XCircle size={14} />
             <span>{paymentError}</span>
-            <button className="text-button" onClick={clearPaymentError}>
+            <button className="text-button" onClick={dismissPaymentError}>
               Dismiss
             </button>
           </div>
@@ -569,33 +627,44 @@ export function PayPalCheckout({
           Loading secure sandbox checkout…
         </div>
       )}
-      <div
-        ref={containerRef}
-        className={
-          sdkReady && !sdkError ? "paypal-buttons" : "paypal-buttons hidden"
-        }
-      />
-      <div className="direct-paypal-actions">
-        <button
-          className="secondary-button"
-          disabled={paymentState === "creating" || paymentState === "capturing"}
-          onClick={() => void prepareOrder()}
-        >
-          {paymentState === "creating" ? (
-            <LoaderCircle className="spin" size={15} />
-          ) : (
-            <ExternalLink size={15} />
-          )}
-          {paymentState === "creating"
-            ? "Preparing direct link…"
-            : "Prepare direct PayPal link"}
-        </button>
-        <small>
-          This is a two-step action. First prepare the server order, then click
-          the link to continue in PayPal.
-        </small>
-      </div>
-      {approvalUrl && (
+      {orderUnavailable ? (
+        <p className="action-note recovery-instruction">
+          This saved Sandbox order cannot be used. Do not retry it; ask the
+          workspace owner to check Sandbox Activity and use Payments recovery.
+        </p>
+      ) : (
+        <>
+          <div
+            ref={containerRef}
+            className={
+              sdkReady && !sdkError ? "paypal-buttons" : "paypal-buttons hidden"
+            }
+          />
+          <div className="direct-paypal-actions">
+            <button
+              className="secondary-button"
+              disabled={
+                paymentState === "creating" || paymentState === "capturing"
+              }
+              onClick={() => void prepareOrder()}
+            >
+              {paymentState === "creating" ? (
+                <LoaderCircle className="spin" size={15} />
+              ) : (
+                <ExternalLink size={15} />
+              )}
+              {paymentState === "creating"
+                ? "Preparing direct link…"
+                : "Prepare direct PayPal link"}
+            </button>
+            <small>
+              This is a two-step action. First prepare the server order, then
+              click the link to continue in PayPal.
+            </small>
+          </div>
+        </>
+      )}
+      {approvalUrl && !orderUnavailable && (
         <a
           className="paypal-continue-link"
           href={approvalUrl}
@@ -618,8 +687,30 @@ export function PayPalCheckout({
         <div className="inline-message error">
           <XCircle size={14} />
           <span>{paymentError}</span>
-          <button className="text-button" onClick={clearPaymentError}>
+          <button className="text-button" onClick={dismissPaymentError}>
             Dismiss
+          </button>
+        </div>
+      )}
+      {orderId && !orderUnavailable && (
+        <div className="editor-actions">
+          <button
+            className="secondary-button"
+            disabled={
+              paymentState === "recovering" ||
+              paymentState === "capturing" ||
+              paymentState === "creating"
+            }
+            onClick={verify}
+          >
+            {paymentState === "recovering" ? (
+              <LoaderCircle className="spin" size={15} />
+            ) : (
+              <RefreshCw size={15} />
+            )}
+            {paymentState === "recovering"
+              ? "Verifying…"
+              : "Verify this same order"}
           </button>
         </div>
       )}

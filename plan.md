@@ -67,3 +67,7 @@ Considered styles: Swiss editorial ledger (0.07), warm workshop notebook (0.05),
 ## Build and delivery workflow
 
 Implement backend and frontend in parallel against the shared API contract, configure the managed database, connect real AI, and add sandbox checkout. Run type checking, application tests, a production build, focused live AI/API checks, and one read-only integration review. Record only measured results. Save the tested version as a Manus checkpoint. The project is not automatically published; public deployment/repository publication and Devpost submission require the user's subsequent approval. Deliver the app in Preview together with a complete source archive and submission materials. A public YouTube video still requires recording/uploading the actual working application and the entrant's approval; a script alone is not the required video.
+
+## October 26 checkout-error correction
+
+Recognize both PayPal missing-resource 404 names (`RESOURCE_NOT_FOUND` and `INVALID_RESOURCE_ID`) without treating other provider/gateway failures as permission to replace an order. Preserve the backend error through SDK callbacks, give accepted quotes a manual GET-only same-order verification control, keep unavailable-order gates after dismiss, and maintain SDK button/verified-paid state correctly. Validate JSON and successful payment/review response shapes before changing UI status. Do not create, capture or retry automatically; reissue still requires the explicit owner-confirmed no-payment gate described above.

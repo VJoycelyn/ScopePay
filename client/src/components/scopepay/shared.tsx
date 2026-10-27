@@ -41,7 +41,15 @@ const SAFE_SCOPEPAY_ERROR_MESSAGES: Record<string, string> = {
   PAYMENT_MISMATCH:
     "PayPal could not verify this order for the accepted version and amount. No payment was recorded.",
   PAYMENT_UNKNOWN:
-    "PayPal's payment status could not be verified. No payment was recorded; try again only when the server says it is safe.",
+    "ScopePay could not verify this payment's status. A payment may still have completed in PayPal. Verify this same order before retrying; do not create a replacement.",
+  SERVICE_UNAVAILABLE:
+    "ScopePay's payment service is temporarily unavailable. Wait at least 60 seconds, then verify this same order. Do not create a replacement while payment status is uncertain.",
+  INVALID_RESPONSE:
+    "ScopePay did not receive a valid service response. Verify the saved order before retrying checkout; payment status is not confirmed.",
+  NETWORK_ERROR:
+    "ScopePay could not reach its server. Check your connection, then verify the saved order before retrying checkout.",
+  API_ERROR:
+    "ScopePay could not complete verification. Wait briefly and verify the saved order again; do not create a replacement.",
   PAYPAL_PROVIDER_REJECTED:
     "PayPal Sandbox rejected this payment request. No payment was recorded.",
   VERSION_MISMATCH:
