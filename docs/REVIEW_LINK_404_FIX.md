@@ -28,7 +28,7 @@ An actual buyer-approved capture remains unverified. Mocked passing tests and vi
 
 TypeScript (`pnpm check`), all **132 mocked tests across 13 files**, the production build (`pnpm build`), and `git diff --check` passed. The backend-focused review verified legitimate revoked/missing/superseded contexts remain 404, while injected database lookup failures return `503 DATABASE_UNAVAILABLE` on both the review and same-order GETs. Checkout tests cover immediate link gating, stale callbacks/handlers, recovery refresh failures, and already verified paid-state preservation. Public-review tests cover the unavailable-link screen and read-only retry for a temporary database failure.
 
-No live acceptance, order creation, reissue, approval, capture, or capability rotation was initiated. Live end-to-end retesting is still blocked on the owner supplying a valid current review link. Deployment success and the live UI check will be reported separately from these mocked test results.
+No live acceptance, order creation, reissue, approval, capture, or capability rotation was initiated. Live end-to-end retesting is still blocked on the owner supplying a valid current review link. See the published result and live UI check below.
 
 A final read-only integration review found no blocking issues in initial/late unavailable-link gating, retained handlers, verified-paid preservation, temporary-service retry, or backend 404/503 classification. The reviewer made no live API or PayPal calls and changed no files. The current revoked link remains unavailable by design; this repair is not permission to resurrect it.
 
