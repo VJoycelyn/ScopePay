@@ -177,7 +177,7 @@ export function Shell({
             <div className="topline-actions">
               <button className="quiet-button" onClick={onSample}>
                 <Sparkles size={15} />
-                Load sample project
+                Sandbox test scenarios
               </button>
               <button className="primary-button small" onClick={onNew}>
                 <Plus size={16} />

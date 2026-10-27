@@ -4,6 +4,7 @@ import type {
   CreateProjectInput,
   EditDocumentInput,
   PaymentResult,
+  SampleScenarioId,
   ScopeProject,
   ServiceStatus,
   Workspace,
@@ -384,8 +385,12 @@ export const scopepayApi = {
       { method: "POST", body: JSON.stringify(input) },
       true
     ),
-  loadSampleProject: () =>
-    request<ScopeProject>("/projects/sample", { method: "POST" }, true),
+  loadSampleProject: (scenario: SampleScenarioId = "harbor-pine") =>
+    request<ScopeProject>(
+      "/projects/sample",
+      { method: "POST", body: JSON.stringify({ scenario }) },
+      true
+    ),
   editDocument: (
     projectId: string,
     documentId: string,

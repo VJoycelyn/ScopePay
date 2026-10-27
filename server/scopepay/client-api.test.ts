@@ -302,3 +302,21 @@ describe("ScopePay client payment API response safety", () => {
     );
   });
 });
+
+describe("ScopePay mock-scenario API request", () => {
+  it.each(["northline-coffee", "caribbean-scribbles"] as const)(
+    "sends the selected %s company template to the existing sample endpoint",
+    async scenario => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ id: "sample-project" }));
+      vi.stubGlobal("fetch", fetchMock);
+      await scopepayApi.loadSampleProject(scenario);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("/api/scopepay/projects/sample");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(String(init.body))).toEqual({ scenario });
+    }
+  );
+});

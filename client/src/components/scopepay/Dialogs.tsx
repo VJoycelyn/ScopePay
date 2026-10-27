@@ -9,8 +9,9 @@ import {
   ShieldCheck,
   Check,
 } from "lucide-react";
-import type { ServiceStatus } from "@shared/scopepay";
-import { Field } from "./shared";
+import type { SampleScenarioId, ServiceStatus } from "@shared/scopepay";
+import { SANDBOX_SAMPLE_SCENARIOS } from "@shared/scopepay-samples";
+import { Field, formatMoney } from "./shared";
 
 export function NewProjectDialog({
   onClose,
@@ -227,6 +228,134 @@ export function HelpDialog({
           Got it
         </button>
       </div>
+    </div>
+  );
+}
+
+export function SampleScenarioDialog({
+  onClose,
+  onSelect,
+  loadingScenario,
+}: {
+  onClose: () => void;
+  onSelect: (scenario: SampleScenarioId) => void;
+  loadingScenario: SampleScenarioId | null;
+}) {
+  return (
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="sample-scenario-title"
+    >
+      <section className="modal sample-scenario-modal">
+        <div className="modal-header">
+          <div>
+            <span className="eyebrow">SANDBOX MOCK CLIENTS</span>
+            <h2 id="sample-scenario-title">Choose a test scenario.</h2>
+            <p>
+              Each option creates a separate editable draft. No review link,
+              acceptance, PayPal order, or capture is created here.
+            </p>
+          </div>
+          <button
+            className="icon-button"
+            onClick={onClose}
+            disabled={Boolean(loadingScenario)}
+            aria-label="Close test scenario picker"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="sample-scenario-list">
+          {Object.entries(SANDBOX_SAMPLE_SCENARIOS).map(([key, scenario]) => {
+            const id = key as SampleScenarioId;
+            const totalCents = scenario.deliverables.reduce(
+              (sum, item) => sum + item.priceCents,
+              0
+            );
+            return (
+              <button
+                className="sample-scenario-option"
+                key={id}
+                onClick={() => onSelect(id)}
+                disabled={Boolean(loadingScenario)}
+                aria-busy={loadingScenario === id}
+              >
+                <span className="sample-scenario-meta">
+                  <span className="eyebrow">
+                    SEPARATE DRAFT · EDITABLE MOCK
+                  </span>
+                  <strong>{formatMoney(totalCents)}</strong>
+                </span>
+                <span className="sample-scenario-company">
+                  {scenario.companyName}
+                </span>
+                <span className="sample-scenario-description">
+                  {scenario.description}
+                </span>
+                <span className="sample-scenario-action">
+                  {loadingScenario === id ? (
+                    <>
+                      <LoaderCircle size={14} className="spin" />
+                      Creating draft…
+                    </>
+                  ) : (
+                    "Create draft"
+                  )}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="sample-scenario-notice">
+          <ShieldCheck size={16} />
+          <div>
+            <p>
+              These company names identify mock ScopePay clients, not PayPal
+              receiving merchants. The Sandbox Personal account is the buyer;
+              every test order goes to the one configured Sandbox Business
+              merchant. The Northline sample is a new draft separate from the
+              accepted Northline Coffee version 2 USD 12.50 record, which it
+              never edits or replaces.
+            </p>
+            <p>
+              Use the{" "}
+              <a
+                href="https://developer.paypal.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                referrerPolicy="no-referrer"
+              >
+                PayPal Developer Dashboard
+              </a>{" "}
+              only to manage test accounts. At checkout, sign in at{" "}
+              <a
+                href="https://www.sandbox.paypal.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                referrerPolicy="no-referrer"
+              >
+                PayPal Sandbox
+              </a>{" "}
+              with a Sandbox Personal buyer. Never use a live account to approve
+              a test payment. ScopePay never asks for or stores Developer
+              Dashboard or buyer passwords.
+            </p>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <span className="ai-notice">No AI call · no payment action</span>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={onClose}
+            disabled={Boolean(loadingScenario)}
+          >
+            Cancel
+          </button>
+        </div>
+      </section>
     </div>
   );
 }

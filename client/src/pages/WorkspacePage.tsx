@@ -9,14 +9,23 @@ import {
   Sparkles,
   XCircle,
 } from "lucide-react";
-import type { ScopeProject, ServiceStatus, Workspace } from "@shared/scopepay";
+import type {
+  SampleScenarioId,
+  ScopeProject,
+  ServiceStatus,
+  Workspace,
+} from "@shared/scopepay";
 import { scopepayApi } from "../lib/scopepay-api";
 import { AnalysisPanel } from "../components/scopepay/AnalysisPanel";
 import {
   DocumentEditor,
   ShareLink,
 } from "../components/scopepay/DocumentEditor";
-import { NewProjectDialog, HelpDialog } from "../components/scopepay/Dialogs";
+import {
+  HelpDialog,
+  NewProjectDialog,
+  SampleScenarioDialog,
+} from "../components/scopepay/Dialogs";
 import { errorMessage } from "../components/scopepay/shared";
 import {
   ActivityList,
@@ -36,6 +45,10 @@ export function WorkspacePage() {
   const [showNew, setShowNew] = useState(false);
   const [creating, setCreating] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showSamplePicker, setShowSamplePicker] = useState(false);
+  const [loadingSample, setLoadingSample] = useState<SampleScenarioId | null>(
+    null
+  );
   const load = useCallback(async () => {
     setLoading(true);
     setMessage("");
@@ -75,11 +88,12 @@ export function WorkspacePage() {
         : current
     );
   };
-  const createSample = async () => {
+  const createSample = async (scenario: SampleScenarioId) => {
     setLoading(true);
+    setLoadingSample(scenario);
     setMessage("");
     try {
-      const next = await scopepayApi.loadSampleProject();
+      const next = await scopepayApi.loadSampleProject(scenario);
       setWorkspace(current =>
         current
           ? {
@@ -93,9 +107,12 @@ export function WorkspacePage() {
       );
       setSelectedId(next.id);
       setSection("overview");
+      setShowSamplePicker(false);
     } catch (error) {
       setMessage(errorMessage(error));
+      setShowSamplePicker(false);
     } finally {
+      setLoadingSample(null);
       setLoading(false);
     }
   };
@@ -129,7 +146,7 @@ export function WorkspacePage() {
       project={project}
       workspace={workspace}
       onNew={() => setShowNew(true)}
-      onSample={createSample}
+      onSample={() => setShowSamplePicker(true)}
       onReload={load}
       loading={loading}
       activeSection={section}
@@ -185,9 +202,12 @@ export function WorkspacePage() {
               <Plus size={16} />
               Create a real project
             </button>
-            <button className="secondary-button" onClick={createSample}>
+            <button
+              className="secondary-button"
+              onClick={() => setShowSamplePicker(true)}
+            >
               <Sparkles size={16} />
-              Load fictional sample
+              Choose Sandbox test scenario
             </button>
           </div>
           <small>
@@ -313,6 +333,13 @@ export function WorkspacePage() {
           onClose={() => setShowNew(false)}
           onSubmit={createProject}
           loading={creating}
+        />
+      )}
+      {showSamplePicker && (
+        <SampleScenarioDialog
+          onClose={() => setShowSamplePicker(false)}
+          onSelect={scenario => void createSample(scenario)}
+          loadingScenario={loadingSample}
         />
       )}
       {showHelp && (

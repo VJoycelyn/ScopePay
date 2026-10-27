@@ -57,12 +57,14 @@ Example variable names are listed in [`.env.example`](.env.example). They intent
 The live hosted demo is [ScopePay on Manus](https://scopepay.manus.space); this is the verified ScopePay-branded hostname. The application uses a managed database and private AI runtime, so cloning/building the public source by itself is not a turnkey judge environment. Verify the hosted app and its testing access in a fresh browser before submission. See [the step-by-step ScopePay completion guide](docs/ScopePay-Completion-Guide.md) for the exact Sandbox walkthrough and remaining requirements.
 
 1. Open the [live hosted demo](https://scopepay.manus.space).
-2. Select **Load sample project** to see a clearly fictional example; it creates no fake client acceptance or payment.
+2. Select **Sandbox test scenarios** and choose Northline Coffee, Caribbean Scribbles Publishing, or Harbor & Pine. Each choice creates a separate draft only; the Northline mock does not change the existing accepted version 2 USD 12.50 record.
 3. In **Scope**, edit the proposed amount and terms if desired, then publish a review link. Open that link in a separate browser or private window to experience the client view.
-4. Review and explicitly accept the quoted version. Use the PayPal **sandbox buyer** account to approve checkout. ScopePay’s server verifies the resulting capture before showing a paid record.
+4. Review and explicitly accept the quoted version. Use a **Sandbox Personal test buyer** from PayPal’s Developer Dashboard to approve at PayPal Sandbox; do not use the original/live PayPal account to approve checkout. ScopePay never asks for or stores Developer Dashboard or buyer passwords. The one configured Sandbox Business merchant receives all test orders. ScopePay’s server verifies the resulting capture before showing a paid record.
 5. Back in the freelancer workspace, analyze a new request such as “Could we add a second mobile landing page for the launch campaign?” Inspect the cited scope evidence and advisory hours. Only then choose to create, price, review, and publish a change order.
 6. If PayPal's secure window is blocked, use the visible direct Sandbox continuation link. If the saved order is missing, the workspace owner can use Payments recovery only after checking Sandbox Activity; this creates no capture and keeps the accepted scope/version/amount unchanged.
 7. Use the fictional sample data for evaluation, or create a new project with fictional, non-sensitive details and review every AI-generated field.
+
+The named companies are mock ScopePay clients, not separate PayPal merchants. The Personal Sandbox account is the buyer, and all test orders use the one configured Business Sandbox merchant. See the [Sandbox company scenario guide](docs/SANDBOX_TEST_SCENARIOS.md) for the safe buyer test flow.
 
 For a code-only evaluation, run `pnpm run check`, `pnpm test`, and `pnpm run build`. See [the under-three-minute demo script](docs/DEMO_SCRIPT.md) and [the proposed Devpost text](docs/HACKATHON_SUBMISSION.md). These materials do not claim a completed buyer-approved capture, public YouTube video, or Devpost submission until verified.
 

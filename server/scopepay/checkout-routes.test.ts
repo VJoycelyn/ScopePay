@@ -871,3 +871,122 @@ describe("ScopePay accepted-version checkout routes", () => {
     }
   );
 });
+
+describe("ScopePay Sandbox mock-company scenarios", () => {
+  it.each([
+    ["northline-coffee", "Northline Coffee", 1250],
+    ["caribbean-scribbles", "Caribbean Scribbles Publishing", 1875],
+  ] as const)(
+    "creates a separate draft for %s and preserves existing Northline version 2",
+    async (scenario, clientName, expectedCents) => {
+      mocks.reset();
+      const existing = mocks.state.workspaceRow.documents.projects[0];
+      existing.id = "existing-northline-project";
+      existing.name = "Northline Coffee launch page";
+      existing.clientName = "Northline Coffee";
+      existing.quote.id = "northline-v2-document";
+      existing.quote.version = 2;
+      existing.quote.status = "accepted";
+      existing.quote.totalCents = 1250;
+      existing.quote.deliverables[0].priceCents = 1250;
+      existing.quote.acceptedAt = "2026-10-20T00:00:00.000Z";
+      existing.quote.paypalOrderId = "saved-northline-v2-order";
+      const existingSnapshot = JSON.stringify(existing);
+      mocks.state.orders.set("northline-v2-local-order", {
+        id: "northline-v2-local-order",
+        workspace_id: "workspace-1",
+        project_id: existing.id,
+        document_id: existing.quote.id,
+        document_version: 2,
+        amount_cents: 1250,
+        currency: "USD",
+        paypal_order_id: "saved-northline-v2-order",
+        request_id: "northline-v2-request",
+        capture_id: null,
+        status: "created",
+        updated_at: "2026-10-20T00:00:00.000Z",
+      });
+      const existingOrders = JSON.stringify([...mocks.state.orders.values()]);
+
+      const result = await post(
+        "/api/scopepay/projects/sample",
+        { scenario },
+        true
+      );
+
+      expect(result.status).toBe(201);
+      expect(result.body.clientName).toBe(clientName);
+      expect(result.body.id).not.toBe(existing.id);
+      expect(result.body.isSample).toBe(true);
+      expect(result.body.quote).toMatchObject({
+        status: "draft",
+        source: "sample",
+        version: 1,
+        currency: "USD",
+        totalCents: expectedCents,
+      });
+      expect(result.body.quote.acceptedAt).toBeUndefined();
+      expect(result.body.quote.clientToken).toBeUndefined();
+      expect(result.body.quote.paypalOrderId).toBeUndefined();
+      expect(result.body.quote.paypalCaptureId).toBeUndefined();
+      expect(result.body.audit[0].message).toContain(
+        "no acceptance or payment"
+      );
+      expect(
+        mocks.state.workspaceRow.documents.projects.find(
+          (item: any) => item.id === existing.id
+        )
+      ).toEqual(JSON.parse(existingSnapshot));
+      expect(JSON.stringify([...mocks.state.orders.values()])).toBe(
+        existingOrders
+      );
+      expect(mocks.state.createCalls).toHaveLength(0);
+      expect(mocks.state.captureCalls).toHaveLength(0);
+      expect(mocks.db.insertClientToken).not.toHaveBeenCalled();
+      expect(mocks.paypal.createPaypalOrder).not.toHaveBeenCalled();
+      expect(mocks.paypal.capturePaypalOrder).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps the legacy empty-body Harbor & Pine sample working as a draft", async () => {
+    mocks.reset();
+    const result = await post("/api/scopepay/projects/sample", undefined, true);
+    expect(result.status).toBe(201);
+    expect(result.body.clientName).toBe("Harbor & Pine");
+    expect(result.body.quote.status).toBe("draft");
+    expect(result.body.quote.totalCents).toBe(270000);
+    expect(mocks.state.createCalls).toHaveLength(0);
+  });
+
+  it.each([
+    ["unknown scenario IDs", { scenario: "another-merchant" }],
+    [
+      "unexpected request fields",
+      { scenario: "northline-coffee", merchant: "separate-account" },
+    ],
+  ])(
+    "rejects %s without changing workspace or payment state",
+    async (_label, body) => {
+      mocks.reset();
+      const before = snapshot();
+      const result = await post("/api/scopepay/projects/sample", body, true);
+      expect(result.status).toBe(400);
+      expect(result.body.code).toBe("INVALID_INPUT");
+      expect(snapshot()).toEqual(before);
+      expect(mocks.state.createCalls).toHaveLength(0);
+      expect(mocks.state.captureCalls).toHaveLength(0);
+    }
+  );
+
+  it("requires owner workspace access before creating any mock company draft", async () => {
+    mocks.reset();
+    const before = snapshot();
+    const result = await post(
+      "/api/scopepay/projects/sample",
+      { scenario: "caribbean-scribbles" },
+      false
+    );
+    expect(result.status).toBe(401);
+    expect(snapshot()).toEqual(before);
+  });
+});

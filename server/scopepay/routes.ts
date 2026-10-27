@@ -15,6 +15,10 @@ import type {
   Workspace,
 } from "@shared/scopepay";
 import {
+  SANDBOX_SAMPLE_SCENARIOS,
+  type SampleScenarioId,
+} from "@shared/scopepay-samples";
+import {
   analyzeChange,
   aiConfigured,
   generateQuote,
@@ -97,6 +101,13 @@ const recoverySchema = z.object({
   version: z.number().int().positive(),
   confirmedNoPayment: z.literal(true),
 });
+const sampleScenarioSchema = z
+  .object({
+    scenario: z
+      .enum(["harbor-pine", "northline-coffee", "caribbean-scribbles"])
+      .optional(),
+  })
+  .strict();
 const DEFAULT_PUBLIC_ORIGIN = "https://scopepay.manus.space";
 
 function now(): string {
@@ -541,63 +552,46 @@ router.post("/projects/sample", async (req, res) => {
         "Workspace token is invalid",
         "WORKSPACE_TOKEN_INVALID"
       );
-    const deliverables: Deliverable[] = [
-      {
-        id: newId(),
-        title: "Fictional landing page direction",
-        description:
-          "Wireframe and visual direction for the fictional Harbor & Pine studio landing page.",
-        hours: 6,
-        priceCents: 90000,
-      },
-      {
-        id: newId(),
-        title: "Fictional responsive build",
-        description:
-          "A responsive front-end implementation for the fictional sample brand.",
-        hours: 10,
-        priceCents: 150000,
-      },
-      {
-        id: newId(),
-        title: "Fictional handoff review",
-        description: "One review pass and a clearly labeled handoff checklist.",
-        hours: 2,
-        priceCents: 30000,
-      },
-    ];
+    const input = parsedBody(sampleScenarioSchema, req.body ?? {});
+    if (!input)
+      return sendError(
+        res,
+        400,
+        "Unknown Sandbox test scenario",
+        "INVALID_INPUT"
+      );
+    const scenarioId: SampleScenarioId = input.scenario ?? "harbor-pine";
+    const scenario = SANDBOX_SAMPLE_SCENARIOS[scenarioId];
+    const deliverables: Deliverable[] = scenario.deliverables.map(item => ({
+      ...item,
+      id: newId(),
+    }));
     const quote = makeDocument({
       id: newId(),
       kind: "quote",
-      title: "Harbor & Pine landing page (fictional sample)",
-      scopeSummary:
-        "A fictional sample scope showing how a small studio landing page can move from brief to explicit deliverables.",
+      title: scenario.projectName,
+      scopeSummary: scenario.scopeSummary,
       deliverables,
-      exclusions: [
-        "Brand naming or trademark clearance",
-        "Paid media management",
-        "Production hosting charges",
-      ],
-      timeline: "Fictional sample: two weeks from kickoff",
-      revisionLimit: "One review pass per deliverable",
+      exclusions: [...scenario.exclusions],
+      timeline: scenario.timeline,
+      revisionLimit: scenario.revisionLimit,
       status: "draft",
       source: "sample",
     });
     const project: ScopeProject = {
       id: newId(),
-      name: "Harbor & Pine landing page (fictional sample)",
-      clientName: "Fictional client — not a real engagement",
-      brief:
-        "This is explicitly fictional sample data for a design studio landing page demonstration.",
-      hourlyRateCents: 15000,
-      budgetCents: 270000,
+      name: scenario.projectName,
+      clientName: scenario.clientName,
+      brief: scenario.brief,
+      hourlyRateCents: scenario.hourlyRateCents,
+      budgetCents: scenario.budgetCents,
       quote,
       changes: [],
       analyses: [],
       audit: [
         audit(
           "sample_created",
-          "Fictional source sample created; no accepted or paid state"
+          `Sandbox mock scenario ${scenarioId} created as a draft; no acceptance or payment`
         ),
       ],
       createdAt: now(),

@@ -100,6 +100,7 @@ export interface CreateProjectInput {
   hourlyRateCents: number;
   budgetCents: number | null;
 }
+export type { SampleScenarioId } from "./scopepay-samples";
 export interface EditDocumentInput {
   title: string;
   scopeSummary: string;
@@ -128,7 +129,7 @@ GET /api/scopepay/status -> ServiceStatus
 POST /api/scopepay/workspaces -> {token:string,workspace:Workspace}
 GET /api/scopepay/workspace -> Workspace (owner response strips clientToken)
 POST /api/scopepay/projects body CreateProjectInput -> ScopeProject (live AI)
-POST /api/scopepay/projects/sample -> ScopeProject (fictional, explicitly source=sample)
+POST /api/scopepay/projects/sample body {scenario?: "harbor-pine" | "northline-coffee" | "caribbean-scribbles"} -> ScopeProject (owner-only, separate source=sample draft; omission defaults to harbor-pine; no client token, acceptance, PayPal order, or capture)
 PATCH /api/scopepay/projects/:projectId/documents/:documentId body EditDocumentInput -> ScopeProject
 POST /api/scopepay/projects/:projectId/documents/:documentId/publish -> ScopeProject (fresh raw client token is returned once for the published target document)
 POST /api/scopepay/projects/:projectId/documents/:documentId/share -> ScopeProject (owner-only; fresh raw client token is returned once on this response for the target non-draft document; prior links are revoked)

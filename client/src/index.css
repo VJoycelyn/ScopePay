@@ -2575,3 +2575,109 @@ textarea {
     font-size: 13px;
   }
 }
+
+.sample-scenario-modal {
+  width: min(740px, calc(100vw - 32px));
+}
+.sample-scenario-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 8px 0 16px;
+}
+.sample-scenario-option {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 9px;
+  padding: 15px;
+  border: 1px solid #deddd7;
+  border-radius: 8px;
+  background: #fcfbf8;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+.sample-scenario-option:hover:not(:disabled),
+.sample-scenario-option:focus-visible {
+  border-color: var(--cobalt);
+  background: #f7f8ff;
+  outline: 2px solid color-mix(in srgb, var(--cobalt) 28%, transparent);
+  outline-offset: 2px;
+}
+.sample-scenario-option:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.sample-scenario-option:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+.sample-scenario-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sample-scenario-meta .eyebrow {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+.sample-scenario-meta > strong {
+  flex: none;
+  color: var(--ink);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+}
+.sample-scenario-company {
+  font-size: 15px;
+  font-weight: 650;
+}
+.sample-scenario-description {
+  min-height: 42px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.sample-scenario-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  color: var(--cobalt);
+  font-size: 11px;
+  font-weight: 600;
+}
+.sample-scenario-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid #e6e5df;
+  border-radius: 6px;
+  background: #f6f5f1;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.65;
+}
+.sample-scenario-notice svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--cobalt);
+}
+.sample-scenario-notice p {
+  margin: 0;
+}
+@media (max-width: 640px) {
+  .sample-scenario-list {
+    grid-template-columns: 1fr;
+  }
+  .sample-scenario-description {
+    min-height: 0;
+  }
+}
