@@ -28,6 +28,7 @@ export function PublicReviewPage({ token }: { token: string }) {
   const [accepting, setAccepting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [loadErrorCode, setLoadErrorCode] = useState<string | undefined>();
   const [paypalNotice, setPaypalNotice] = useState("");
   const [paypalNoticeError, setPaypalNoticeError] = useState(false);
   const [checkoutIssue, setCheckoutIssue] = useState<{
@@ -38,6 +39,7 @@ export function PublicReviewPage({ token }: { token: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
+    setLoadErrorCode(undefined);
     try {
       const [next, nextStatus] = await Promise.all([
         scopepayApi.clientReview(token),
@@ -52,6 +54,7 @@ export function PublicReviewPage({ token }: { token: string }) {
       );
     } catch (err) {
       setError(errorMessage(err));
+      setLoadErrorCode(err instanceof ScopePayApiError ? err.code : undefined);
     } finally {
       setLoading(false);
     }
@@ -162,6 +165,9 @@ export function PublicReviewPage({ token }: { token: string }) {
       setPaypalNotice("");
     }
   };
+  const unavailableLink =
+    loadErrorCode === "CLIENT_LINK_NOT_FOUND" ||
+    loadErrorCode === "CLIENT_TOKEN_NOT_FOUND";
   if (loading)
     return (
       <div className="client-loading">
@@ -176,11 +182,20 @@ export function PublicReviewPage({ token }: { token: string }) {
         <Logo />
         <div>
           <XCircle size={25} />
-          <h1>This review link is unavailable.</h1>
+          <h1>
+            {unavailableLink
+              ? "This review link is unavailable."
+              : "We couldn’t load this review."}
+          </h1>
           <p>
             {error ||
               "The document may have been replaced or the link may be incomplete."}
           </p>
+          {!unavailableLink && (
+            <button className="secondary-button" onClick={() => void load()}>
+              Retry loading this review
+            </button>
+          )}
           <a href="/">Return to ScopePay</a>
         </div>
       </div>

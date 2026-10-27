@@ -230,6 +230,44 @@ describe("ScopePay client payment API response safety", () => {
     expect(error.message).not.toContain("private-ray");
   });
 
+  it.each(["CLIENT_LINK_NOT_FOUND", "CLIENT_TOKEN_NOT_FOUND"] as const)(
+    "maps %s to unavailable-review guidance on both review load and same-order verification",
+    async code => {
+      const fetchMock = vi.fn().mockImplementation(async () =>
+        jsonResponse(
+          {
+            error: "private client capability must not reach the UI",
+            code,
+          },
+          404
+        )
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const reviewError = await rejected(
+        scopepayApi.clientReview(CLIENT_TOKEN)
+      );
+      expect(reviewError.code).toBe(code);
+      expect(reviewError.status).toBe(404);
+      expect(reviewError.message).toContain("review link is unavailable");
+      expect(reviewError.message).toContain(
+        "saved PayPal order could not be checked"
+      );
+      expect(reviewError.message).toContain(
+        "does not prove no payment completed"
+      );
+      expect(reviewError.message).not.toContain("private client capability");
+
+      const orderError = await rejected(
+        scopepayApi.reconcileOrder(CLIENT_TOKEN, PROVIDER_ORDER_ID)
+      );
+      expect(orderError.code).toBe(code);
+      expect(orderError.status).toBe(404);
+      expect(orderError.message).toBe(reviewError.message);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    }
+  );
+
   it("rejects a paid review without a verified capture identifier", async () => {
     vi.stubGlobal(
       "fetch",

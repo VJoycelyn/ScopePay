@@ -304,7 +304,9 @@ const mocks = vi.hoisted(() => {
   const db = {
     databaseReady: vi.fn(async () => false),
     getClientToken: vi.fn(async (hash: string) =>
-      hash === state.token?.token_hash ? state.token : null
+      hash === state.token?.token_hash && !state.token.revoked
+        ? state.token
+        : null
     ),
     getScopePayPool: vi.fn(() => ({ getConnection: async () => connection })),
     hashCapability: vi.fn((value: string) => `hash:${value}`),
@@ -418,6 +420,11 @@ async function post(path: string, body: unknown, owner = false) {
   return { status: response.status, body: await response.json() };
 }
 
+async function get(path: string) {
+  const response = await fetch(`${baseUrl}${path}`);
+  return { status: response.status, body: await response.json() };
+}
+
 function documentFromState(): any {
   const project = mocks.state.workspaceRow.documents.projects[0];
   return project.quote.id === mocks.state.token.document_id
@@ -435,6 +442,64 @@ function snapshot() {
 }
 
 describe("ScopePay accepted-version checkout routes", () => {
+  it.each([
+    [
+      "revoked",
+      () => {
+        mocks.state.token.revoked = 1;
+      },
+    ],
+    [
+      "missing",
+      () => {
+        mocks.state.token = null;
+      },
+    ],
+    [
+      "missing document",
+      () => {
+        mocks.state.token.document_id = "missing-document";
+      },
+    ],
+    [
+      "superseded version",
+      () => {
+        mocks.state.token.document_version = 2;
+      },
+    ],
+  ] as const)(
+    "keeps a genuine %s review link as a 404",
+    async (_label, mutate) => {
+      mocks.reset();
+      mutate();
+      const result = await get(`/api/scopepay/client/${CLIENT_TOKEN}`);
+      expect(result.status).toBe(404);
+      expect(result.body.code).toBe("CLIENT_LINK_NOT_FOUND");
+    }
+  );
+
+  it("reports a client review database lookup failure as unavailable", async () => {
+    mocks.reset();
+    mocks.db.getClientToken.mockRejectedValueOnce(
+      new Error("db connection lost")
+    );
+    const result = await get(`/api/scopepay/client/${CLIENT_TOKEN}`);
+    expect(result.status).toBe(503);
+    expect(result.body.code).toBe("DATABASE_UNAVAILABLE");
+  });
+
+  it("reports a same-order verification database lookup failure as unavailable", async () => {
+    mocks.reset();
+    mocks.db.getClientToken.mockRejectedValueOnce(
+      new Error("db connection lost")
+    );
+    const result = await get(
+      `/api/scopepay/client/${CLIENT_TOKEN}/orders/local-order-1`
+    );
+    expect(result.status).toBe(503);
+    expect(result.body.code).toBe("DATABASE_UNAVAILABLE");
+  });
+
   it.each(["quote", "change"] as const)(
     "creates and reuses one exact USD 1250 order for an accepted %s",
     async kind => {

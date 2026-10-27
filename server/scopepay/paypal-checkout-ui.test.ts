@@ -714,3 +714,108 @@ describe("PayPalCheckout stale SDK instance protection", () => {
     expect(testState.api.createOrder).not.toHaveBeenCalled();
   });
 });
+
+describe("PayPalCheckout unavailable client-link boundary", () => {
+  const linkMessage =
+    "This client review link is unavailable. The saved PayPal order could not be checked. Ask the workspace owner for a current link; this does not prove no payment completed.";
+
+  it.each(["CLIENT_LINK_NOT_FOUND", "CLIENT_TOKEN_NOT_FOUND"] as const)(
+    "hides all payment and recovery controls immediately for %s",
+    code => {
+      const { runtime, capturedOptions, scripts } = mount(makeReview(), {
+        message: linkMessage,
+        code,
+      });
+      expect(renderedText(runtime.tree)).toContain(
+        "Checkout is paused for this link"
+      );
+      expect(renderedText(runtime.tree)).toContain(
+        "does not prove no payment completed"
+      );
+      expect(buttons(runtime.tree)).toHaveLength(0);
+      expect(capturedOptions).toHaveLength(0);
+      expect(scripts).toHaveLength(0);
+      expect(testState.api.createOrder).not.toHaveBeenCalled();
+      expect(testState.api.captureOrder).not.toHaveBeenCalled();
+      expect(testState.api.reconcileOrder).not.toHaveBeenCalled();
+      expect(testState.api.clientReview).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["CLIENT_LINK_NOT_FOUND", "CLIENT_TOKEN_NOT_FOUND"] as const)(
+    "locks checkout after same-order verification returns %s and ignores stale handlers",
+    async code => {
+      testState.api.reconcileOrder.mockRejectedValue(
+        new testState.ScopePayApiError(linkMessage, 404, code)
+      );
+      const { runtime, capturedOptions, onReview } = mount();
+      const oldSdk = capturedOptions[0];
+      const verify = buttonNamed(runtime.tree, "Verify this same order")!.props!
+        .onClick;
+      const prepare = buttonNamed(runtime.tree, "Prepare direct PayPal link")!
+        .props!.onClick;
+      await verify();
+      runtime.flush();
+      expect(renderedText(runtime.tree)).toContain(linkMessage);
+      expect(buttons(runtime.tree)).toHaveLength(0);
+      await verify();
+      await prepare();
+      await oldSdk.onApprove({ orderID: "saved-order-1" });
+      await expect(oldSdk.createOrder()).rejects.toThrow();
+      oldSdk.onError(
+        new Error("late SDK error must not replace the link error")
+      );
+      runtime.flush();
+      expect(testState.api.reconcileOrder).toHaveBeenCalledTimes(1);
+      expect(testState.api.createOrder).not.toHaveBeenCalled();
+      expect(testState.api.captureOrder).not.toHaveBeenCalled();
+      expect(onReview).not.toHaveBeenCalled();
+      expect(renderedText(runtime.tree)).not.toContain("late SDK error");
+      expect(renderedText(runtime.tree)).not.toContain(
+        "Payment recorded by the sandbox"
+      );
+    }
+  );
+
+  it.each(["CLIENT_LINK_NOT_FOUND", "CLIENT_TOKEN_NOT_FOUND"] as const)(
+    "removes owner-recovery controls if the review refresh returns %s",
+    async code => {
+      testState.api.clientReview.mockRejectedValue(
+        new testState.ScopePayApiError(linkMessage, 404, code)
+      );
+      const { runtime } = mount(makeReview(), {
+        message: "This PayPal Sandbox order is unavailable.",
+        code: "PAYPAL_ORDER_NOT_FOUND",
+      });
+      const check = buttonNamed(runtime.tree, "Check for owner recovery")!
+        .props!.onClick;
+      check();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      runtime.flush();
+      expect(renderedText(runtime.tree)).toContain(
+        "Checkout is paused for this link"
+      );
+      expect(buttons(runtime.tree)).toHaveLength(0);
+      check();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(testState.api.clientReview).toHaveBeenCalledTimes(1);
+      expect(testState.api.reconcileOrder).not.toHaveBeenCalled();
+      expect(testState.api.createOrder).not.toHaveBeenCalled();
+      expect(testState.api.captureOrder).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["CLIENT_LINK_NOT_FOUND", "CLIENT_TOKEN_NOT_FOUND"] as const)(
+    "does not downgrade an already server-verified paid review on a later %s notice",
+    code => {
+      const paid = makeReview("paid");
+      paid.document.paypalCaptureId = "verified-capture-1";
+      const { runtime } = mount(paid, { message: linkMessage, code });
+      expect(renderedText(runtime.tree)).toContain(
+        "Payment recorded by the sandbox"
+      );
+      expect(testState.api.createOrder).not.toHaveBeenCalled();
+      expect(testState.api.captureOrder).not.toHaveBeenCalled();
+    }
+  );
+});

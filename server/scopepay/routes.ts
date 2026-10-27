@@ -1142,7 +1142,14 @@ async function loadPublicContext(hash: string): Promise<{
   const workspace = parseWorkspace(row.documents);
   const project = workspace.projects.find(item => item.id === token.project_id);
   if (!project) return null;
-  const document = documentFromProject(project, token.document_id);
+  let document: ScopeDocument;
+  try {
+    document = documentFromProject(project, token.document_id);
+  } catch (error) {
+    if (error instanceof Error && error.message === "DOCUMENT_NOT_FOUND")
+      return null;
+    throw error;
+  }
   if (
     document.version !== token.document_version ||
     document.status === "draft"
@@ -1167,7 +1174,7 @@ router.get("/client/:token", async (req, res) => {
       );
     res.json(publicReview(context.project, context.document));
   } catch {
-    sendError(res, 404, "Review link not found", "CLIENT_LINK_NOT_FOUND");
+    sendError(res, 503, "Database is not ready", "DATABASE_UNAVAILABLE");
   }
 });
 
@@ -2562,12 +2569,7 @@ router.get("/client/:token/orders/:orderId", async (req, res) => {
       );
     res.json(publicReview(fresh.project, fresh.document));
   } catch {
-    sendError(
-      res,
-      503,
-      "Payment status is temporarily unavailable",
-      "PAYMENT_UNAVAILABLE"
-    );
+    sendError(res, 503, "Database is not ready", "DATABASE_UNAVAILABLE");
   }
 });
 

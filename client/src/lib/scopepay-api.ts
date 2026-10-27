@@ -91,6 +91,12 @@ const SAFE_ERROR_MESSAGES: Record<string, string> = {
   ACCEPTANCE_REQUIRED: "Client acceptance is required before payment.",
   CAPTURE_IN_PROGRESS:
     "A payment capture is still being processed. Verify payment before trying again.",
+  CLIENT_LINK_NOT_FOUND:
+    "This client review link is unavailable. The saved PayPal order could not be checked. Ask the workspace owner for a current link; this does not prove no payment completed.",
+  CLIENT_TOKEN_NOT_FOUND:
+    "This client review link is unavailable. The saved PayPal order could not be checked. Ask the workspace owner for a current link; this does not prove no payment completed.",
+  DATABASE_UNAVAILABLE:
+    "ScopePay cannot read its saved records right now. Wait and try again; do not create a replacement while payment status is uncertain.",
   ORDER_NOT_FOUND: "The payment order could not be found.",
   ORDER_NOT_READY: "The payment order is still being prepared.",
   ORDER_PENDING:

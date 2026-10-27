@@ -28,6 +28,12 @@ export const formatTime = (value?: string) =>
       }).format(new Date(value))
     : "—";
 const SAFE_SCOPEPAY_ERROR_MESSAGES: Record<string, string> = {
+  CLIENT_LINK_NOT_FOUND:
+    "This client review link is unavailable. The saved PayPal order could not be checked. Ask the workspace owner for a current link; this does not prove no payment completed.",
+  CLIENT_TOKEN_NOT_FOUND:
+    "This client review link is unavailable. The saved PayPal order could not be checked. Ask the workspace owner for a current link; this does not prove no payment completed.",
+  DATABASE_UNAVAILABLE:
+    "ScopePay cannot read its saved records right now. Wait and try again; do not create a replacement while payment status is uncertain.",
   PAYPAL_ORDER_NOT_FOUND:
     "This PayPal Sandbox order is unavailable. Follow the recovery steps below; payment status is not confirmed.",
   CAPTURE_IN_PROGRESS:

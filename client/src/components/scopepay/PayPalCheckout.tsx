@@ -23,6 +23,8 @@ const SAFE_API_CODES = new Set([
   "PAYPAL_ORDER_NOT_FOUND",
   "ORDER_NOT_FOUND",
   "CAPTURE_IN_PROGRESS",
+  "CLIENT_LINK_NOT_FOUND",
+  "CLIENT_TOKEN_NOT_FOUND",
   "ORDER_SUPERSEDED",
   "ORDER_PENDING",
   "PAYMENT_PENDING",
@@ -165,6 +167,10 @@ function errorCode(error: unknown): string | undefined {
   return error instanceof ScopePayApiError ? error.code : undefined;
 }
 
+function isUnavailableClientLinkCode(code?: string): boolean {
+  return code === "CLIENT_LINK_NOT_FOUND" || code === "CLIENT_TOKEN_NOT_FOUND";
+}
+
 declare global {
   interface Window {
     paypal?: {
@@ -208,6 +214,9 @@ export function PayPalCheckout({
     externalError?.code
   );
   const [recoveryNotice, setRecoveryNotice] = useState("");
+  const [reviewLinkUnavailable, setReviewLinkUnavailable] = useState(
+    isUnavailableClientLinkCode(externalError?.code)
+  );
   const [orderId, setOrderId] = useState(review.document.paypalOrderId ?? "");
   const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
   const paymentErrorRef = useRef("");
@@ -215,6 +224,9 @@ export function PayPalCheckout({
   const verifiedPaidRef = useRef(review.document.status === "paid");
   const recoveryCheckRef = useRef(false);
   const sdkGenerationRef = useRef(0);
+  const reviewLinkUnavailableRef = useRef(
+    isUnavailableClientLinkCode(externalError?.code)
+  );
   const orderUnavailable =
     paymentErrorCode === "PAYPAL_ORDER_NOT_FOUND" ||
     paymentErrorCode === "ORDER_NOT_FOUND";
@@ -237,10 +249,15 @@ export function PayPalCheckout({
   useEffect(() => {
     if (!externalError || verifiedPaidRef.current) return;
     if (
+      isUnavailableClientLinkCode(externalError.code) ||
       externalError.code === "PAYPAL_ORDER_NOT_FOUND" ||
       externalError.code === "ORDER_NOT_FOUND"
     )
       sdkGenerationRef.current += 1;
+    if (isUnavailableClientLinkCode(externalError.code)) {
+      reviewLinkUnavailableRef.current = true;
+      setReviewLinkUnavailable(true);
+    }
     paymentErrorRef.current = externalError.message;
     setPaymentError(externalError.message);
     setPaymentErrorCode(externalError.code);
@@ -251,6 +268,7 @@ export function PayPalCheckout({
     if (
       !status?.paypalConfigured ||
       !status.paypalClientId ||
+      reviewLinkUnavailable ||
       review.document.status !== "accepted"
     )
       return;
@@ -276,6 +294,7 @@ export function PayPalCheckout({
     status?.paypalClientId,
     status?.paypalConfigured,
     review.document.status,
+    reviewLinkUnavailable,
   ]);
 
   const clearPaymentError = () => {
@@ -287,6 +306,11 @@ export function PayPalCheckout({
   const showPaymentError = (message: string, code?: string) => {
     if (code === "PAYPAL_ORDER_NOT_FOUND" || code === "ORDER_NOT_FOUND")
       sdkGenerationRef.current += 1;
+    if (isUnavailableClientLinkCode(code)) {
+      sdkGenerationRef.current += 1;
+      reviewLinkUnavailableRef.current = true;
+      setReviewLinkUnavailable(true);
+    }
     paymentErrorRef.current = message;
     setPaymentError(message);
     setPaymentErrorCode(code);
@@ -299,7 +323,12 @@ export function PayPalCheckout({
   };
 
   const prepareOrder = async (isCurrent: () => boolean = () => true) => {
-    if (!isCurrent() || verifiedPaidRef.current) return null;
+    if (
+      !isCurrent() ||
+      verifiedPaidRef.current ||
+      reviewLinkUnavailableRef.current
+    )
+      return null;
     setPaymentState("creating");
     clearPaymentError();
     setApprovalUrl(null);
@@ -348,7 +377,12 @@ export function PayPalCheckout({
     traceId = createTraceId(),
     isCurrent: () => boolean = () => true
   ): Promise<{ success: boolean; error?: unknown }> => {
-    if (!isCurrent() || verifiedPaidRef.current) return { success: false };
+    if (
+      !isCurrent() ||
+      verifiedPaidRef.current ||
+      reviewLinkUnavailableRef.current
+    )
+      return { success: false };
     const startedAt = nowMs();
     const captureFields = {
       traceId,
@@ -403,6 +437,7 @@ export function PayPalCheckout({
   };
 
   const verify = async () => {
+    if (reviewLinkUnavailableRef.current) return;
     if (!orderId) {
       showPaymentError(
         "No saved PayPal order is available yet. Ask the workspace owner to check PayPal Sandbox Activity and use Payments panel recovery."
@@ -427,6 +462,7 @@ export function PayPalCheckout({
   };
 
   const checkOwnerRecovery = async () => {
+    if (reviewLinkUnavailableRef.current) return;
     if (recoveryCheckRef.current) return;
     recoveryCheckRef.current = true;
     setPaymentState("recovering");
@@ -492,8 +528,13 @@ export function PayPalCheckout({
       );
     } catch (error) {
       // Gateway/transport failure is uncertain, never permission to replace.
-      setRecoveryNotice(errorMessage(error));
-      setPaymentErrorCode(unavailableCode);
+      const code = errorCode(error);
+      if (isUnavailableClientLinkCode(code))
+        showPaymentError(errorMessage(error), code);
+      else {
+        setRecoveryNotice(errorMessage(error));
+        setPaymentErrorCode(unavailableCode);
+      }
       setPaymentState("error");
     } finally {
       recoveryCheckRef.current = false;
@@ -533,6 +574,7 @@ export function PayPalCheckout({
       !sdkReady ||
       !containerRef.current ||
       !window.paypal ||
+      reviewLinkUnavailable ||
       orderUnavailable ||
       review.document.status !== "accepted"
     )
@@ -621,6 +663,7 @@ export function PayPalCheckout({
     review.document.status,
     review.document.totalCents,
     review.document.currency,
+    reviewLinkUnavailable,
     orderUnavailable,
   ]);
 
@@ -632,6 +675,24 @@ export function PayPalCheckout({
           <strong>Payment recorded by the sandbox.</strong>
           <span>The verified capture is now part of the project ledger.</span>
         </div>
+      </div>
+    );
+
+  if (reviewLinkUnavailable)
+    return (
+      <div className="checkout-box">
+        <div className="inline-message error" role="alert">
+          <XCircle size={14} />
+          <span>
+            {paymentError ||
+              "This client review link is unavailable. The saved PayPal order could not be checked. Ask the workspace owner for a current link; this does not prove no payment completed."}
+          </span>
+        </div>
+        <p className="action-note">
+          Checkout is paused for this link. Ask the workspace owner to check
+          PayPal Sandbox Activity and provide a current review link. Do not
+          prepare another order from this unavailable link.
+        </p>
       </div>
     );
 
