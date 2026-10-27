@@ -31,4 +31,4 @@ The focused integration review also identified stale PayPal SDK callbacks after 
 - `git diff --check`: passed.
 - Focused read-only integration review found the stale-SDK blocker described above; it was corrected and covered by five additional mocked regressions.
 
-These are source/mocked test results. Publication and the live guide's GET-only behavior are verified separately. They do not prove a successful real buyer-approved Sandbox capture.
+These are source/mocked test results. The published page was checked for the normal accepted review, same-order control, and help disclosure. The click-driven owner-recovery path was not activated in the live browser; its behavior is covered by mocked tests. These checks do not prove a successful real buyer-approved Sandbox capture.
