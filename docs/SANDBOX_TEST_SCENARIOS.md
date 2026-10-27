@@ -14,3 +14,9 @@ ScopePay now offers selectable draft-only mock scenarios for Northline Coffee an
 The selected company is the mock **ScopePay client**, not a separate PayPal receiving merchant. The Personal Sandbox profile is the buyer. ScopePay remains configured for one Sandbox Business merchant, and all test orders use that merchant. This UI does not create or route to multiple PayPal merchant accounts and does not use real-money accounts. No AI call, acceptance, order, or payment occurs when merely loading a scenario. ScopePay never asks for or stores Developer Dashboard or buyer passwords. Do not use an original/live PayPal account to approve a Sandbox test payment.
 
 When testing Northline, choose the separate mock draft from the scenario picker rather than editing or recovering the existing accepted version 2 record. The current v2 terms remain exactly USD 12.50 and its payment state must be handled through the existing owner Activity/recovery rules.
+
+## Validation receipt — October 26, 2026
+
+TypeScript checking, **113 mocked tests across 12 files**, production build, and whitespace checks passed. The focused read-only review found no functional blocker. Tests cover both requested company scenarios, separate draft-only records, preservation of an accepted Northline v2 USD 12.50 fixture and saved order, owner-only access, legacy empty-body compatibility, strict rejection of unknown IDs/extra fields, selector disclosures, and the Dashboard/Sandbox login boundary.
+
+The PayPal app configuration and protected credentials were not changed. This implementation makes no live-account API calls and initiates no live workspace draft, client acceptance, PayPal order, buyer approval, or capture during validation. The genuine existing Northline v2 completed capture remains unverified; a successful mocked capture is not a real Sandbox payment receipt.
