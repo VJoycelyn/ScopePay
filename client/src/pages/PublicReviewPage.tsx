@@ -34,6 +34,7 @@ export function PublicReviewPage({ token }: { token: string }) {
   const [checkoutIssue, setCheckoutIssue] = useState<{
     message: string;
     code?: string;
+    approvalUrl?: string | null;
   } | null>(null);
   const handledPaypalQuery = useRef("");
   const load = useCallback(async () => {
@@ -137,6 +138,7 @@ export function PublicReviewPage({ token }: { token: string }) {
         setCheckoutIssue({
           message,
           code: err instanceof ScopePayApiError ? err.code : "PAYMENT_UNKNOWN",
+          approvalUrl: err instanceof ScopePayApiError ? err.approvalUrl : null,
         });
       });
   }, [review, token]);

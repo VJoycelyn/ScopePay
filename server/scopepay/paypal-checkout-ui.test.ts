@@ -916,3 +916,148 @@ describe("PayPalCheckout unavailable client-link boundary", () => {
     }
   );
 });
+
+describe("PayPalCheckout same-order buyer action", () => {
+  const safeUrl =
+    "https://www.sandbox.paypal.com/checkoutnow?token=saved-order-1";
+  const actionReview = () => ({
+    ...makeReview("payment_pending"),
+    paymentAction: { kind: "payer_action_required", approvalUrl: safeUrl },
+  });
+
+  it("gates SDK and retry controls immediately when preparation returns a verified pending review", async () => {
+    testState.api.createOrder.mockResolvedValue({
+      id: "saved-order-1",
+      approvalUrl: safeUrl,
+      review: actionReview(),
+    });
+    const { runtime, onReview, capturedOptions } = mount(
+      makeReview("accepted")
+    );
+    const oldSdkCount = capturedOptions.length;
+    await buttonNamed(
+      runtime.tree,
+      "Prepare PayPal Sandbox checkout"
+    )!.props!.onClick();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    runtime.flush();
+    expect(onReview).toHaveBeenCalledWith(actionReview());
+    expect(renderedText(runtime.tree)).toContain(
+      "PayPal needs one more buyer step"
+    );
+    expect(buttonNamed(runtime.tree, "Retry capture")).toBeUndefined();
+    expect(
+      linkNamed(runtime.tree, "Open PayPal Sandbox checkout")?.props?.href
+    ).toBe(safeUrl);
+    expect(capturedOptions).toHaveLength(oldSdkCount);
+    expect(testState.api.createOrder).toHaveBeenCalledTimes(1);
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+  });
+
+  it("shows the exact same-order buyer step after GET verification with no automatic capture or replacement", async () => {
+    testState.api.reconcileOrder.mockResolvedValue(actionReview());
+    const { runtime, onReview } = mount(makeReview("payment_pending"));
+    await buttonNamed(runtime.tree, "Verify payment")!.props!.onClick();
+    runtime.flush();
+    expect(renderedText(runtime.tree)).toContain(
+      "PayPal needs one more buyer step"
+    );
+    expect(renderedText(runtime.tree)).toContain("$12.50 USD order");
+    expect(renderedText(runtime.tree)).toContain("Sandbox Personal buyer");
+    const link = linkNamed(runtime.tree, "Open PayPal Sandbox checkout");
+    expect(link?.props?.href).toBe(safeUrl);
+    expect(link?.props?.target).toBe("_blank");
+    expect(link?.props?.rel).toBe("noopener noreferrer");
+    expect(link?.props?.referrerPolicy).toBe("no-referrer");
+    expect(buttonNamed(runtime.tree, "Retry capture")).toBeUndefined();
+    expect(onReview).toHaveBeenCalledWith(actionReview());
+    expect(testState.api.reconcileOrder).toHaveBeenCalledTimes(1);
+    expect(testState.api.createOrder).not.toHaveBeenCalled();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+  });
+
+  it("preserves the buyer-action gate after dismissing capture-error text", () => {
+    const { runtime, capturedOptions } = mount(makeReview("payment_pending"), {
+      message: "Buyer action required",
+      code: "PAYER_ACTION_REQUIRED",
+      approvalUrl: safeUrl,
+    } as any);
+    buttonNamed(runtime.tree, "Dismiss")!.props!.onClick();
+    runtime.flush();
+    expect(renderedText(runtime.tree)).toContain(
+      "PayPal needs one more buyer step"
+    );
+    expect(
+      linkNamed(runtime.tree, "Open PayPal Sandbox checkout")?.props?.href
+    ).toBe(safeUrl);
+    expect(buttonNamed(runtime.tree, "Retry capture")).toBeUndefined();
+    expect(capturedOptions).toHaveLength(0);
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+    expect(testState.api.createOrder).not.toHaveBeenCalled();
+  });
+
+  it("does not render a live-host or forged action URL even from external error props", () => {
+    const { runtime } = mount(makeReview("payment_pending"), {
+      message: "Buyer action required",
+      code: "PAYER_ACTION_REQUIRED",
+      approvalUrl: "https://www.paypal.com/checkoutnow?token=bad",
+    } as any);
+    expect(
+      linkNamed(runtime.tree, "Open PayPal Sandbox checkout")
+    ).toBeUndefined();
+    expect(renderedText(runtime.tree)).toContain(
+      "No safe action link is available yet"
+    );
+    expect(buttonNamed(runtime.tree, "Retry capture")).toBeUndefined();
+  });
+
+  it("keeps the action gate and old safe link through a gateway failure without capture", async () => {
+    testState.api.reconcileOrder.mockRejectedValue(
+      new testState.ScopePayApiError(
+        "Service unavailable",
+        502,
+        "SERVICE_UNAVAILABLE"
+      )
+    );
+    const { runtime } = mount(actionReview());
+    await buttonNamed(runtime.tree, "Verify payment")!.props!.onClick();
+    runtime.flush();
+    expect(buttonNamed(runtime.tree, "Retry capture")).toBeUndefined();
+    expect(
+      linkNamed(runtime.tree, "Open PayPal Sandbox checkout")?.props?.href
+    ).toBe(safeUrl);
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+    expect(testState.api.createOrder).not.toHaveBeenCalled();
+  });
+
+  it("clears buyer-action guidance after a matching verified paid GET without issuing capture", async () => {
+    const paid = makeReview("paid");
+    paid.document.paypalCaptureId = "verified-capture";
+    testState.api.reconcileOrder.mockResolvedValue(paid);
+    const { runtime } = mount(actionReview());
+    await buttonNamed(runtime.tree, "Verify payment")!.props!.onClick();
+    runtime.flush();
+    expect(renderedText(runtime.tree)).toContain(
+      "Payment recorded by the sandbox"
+    );
+    expect(renderedText(runtime.tree)).not.toContain(
+      "PayPal needs one more buyer step"
+    );
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+  });
+
+  it("rejects a different order or terms on GET without clearing the buyer-action gate", async () => {
+    const mismatch = makeReview("paid", "different-order");
+    mismatch.document.paypalCaptureId = "unrelated-capture";
+    testState.api.reconcileOrder.mockResolvedValue(mismatch);
+    const { runtime, onReview } = mount(actionReview());
+    await buttonNamed(runtime.tree, "Verify payment")!.props!.onClick();
+    runtime.flush();
+    expect(onReview).not.toHaveBeenCalled();
+    expect(renderedText(runtime.tree)).not.toContain(
+      "Payment recorded by the sandbox"
+    );
+    expect(buttonNamed(runtime.tree, "Retry capture")).toBeUndefined();
+    expect(testState.api.captureOrder).not.toHaveBeenCalled();
+  });
+});

@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { safeSandboxApprovalUrl } from "../../client/src/lib/paypal-safety";
-import { extractApprovalUrl, getPaypalOrder } from "./paypal";
+import {
+  capturePaypalOrder,
+  extractApprovalUrl,
+  extractPayerActionUrl,
+  getPaypalOrder,
+  paypalPaymentStatus,
+  recoveryStatus,
+  verifyPaypalWebhookSignature,
+} from "./paypal";
 
 describe("PayPal Sandbox approval URL allowlist", () => {
   const safeUrl =
@@ -20,6 +28,8 @@ describe("PayPal Sandbox approval URL allowlist", () => {
     "https://www.paypal.com/checkoutnow",
     "https://www.sandbox.paypal.com.attacker.example/checkoutnow",
     "https://user@www.sandbox.paypal.com/checkoutnow",
+    "https://www.sandbox.paypal.com:8443/checkoutnow",
+    "https://www.sandbox.paypal.com/checkoutnow#untrusted",
   ])("rejects non-Sandbox or unsafe approval URL %s", url => {
     expect(
       extractApprovalUrl({ links: [{ rel: "approve", href: url }] })
@@ -30,6 +40,24 @@ describe("PayPal Sandbox approval URL allowlist", () => {
   it("does not expose a provider link with an unrelated relation", () => {
     const payload = { links: [{ rel: "self", href: safeUrl }] };
     expect(extractApprovalUrl(payload)).toBeNull();
+  });
+
+  it("requires an explicit payer-action relation and safe official origin", () => {
+    expect(
+      extractPayerActionUrl({ links: [{ rel: "approve", href: safeUrl }] })
+    ).toBeNull();
+    expect(
+      extractPayerActionUrl({ links: [{ rel: "payer-action", href: safeUrl }] })
+    ).toBe(safeUrl);
+    for (const href of [
+      "https://www.paypal.com/action",
+      "https://www.sandbox.paypal.com:8443/action",
+      `${safeUrl}#unsafe`,
+      "https://user@www.sandbox.paypal.com/action",
+    ])
+      expect(
+        extractPayerActionUrl({ links: [{ rel: "payer-action", href }] })
+      ).toBeNull();
   });
 });
 
@@ -104,5 +132,155 @@ describe("PayPal saved-order error classification", () => {
     await expect(getPaypalOrder("FICTIONAL-SAVED-ORDER")).rejects.toThrow(
       /^PAYPAL_UNAVAILABLE$/
     );
+  });
+
+  it("classifies only an exact PayPal 422 payer-action issue without leaking its payload", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "fictional-token" }), {
+          status: 200,
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            name: "UNPROCESSABLE_ENTITY",
+            details: [
+              {
+                issue: "PAYER_ACTION_REQUIRED",
+                description: "private provider detail",
+                links: [{ href: "https://attacker.example/action" }],
+              },
+            ],
+          }),
+          { status: 422 }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(capturePaypalOrder("FICTIONAL-SAVED-ORDER")).rejects.toThrow(
+      /^PAYPAL_PAYER_ACTION_REQUIRED$/
+    );
+    expect(paypalPaymentStatus({ status: "PAYER_ACTION_REQUIRED" })).toBe(
+      "PAYER_ACTION_REQUIRED"
+    );
+    expect(recoveryStatus({ status: "PAYER_ACTION_REQUIRED" })).toBe("pending");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an unrecognized provider status unknown rather than retryable or paid", () => {
+    expect(paypalPaymentStatus({ status: "SOMETHING_NEW" })).toBe("UNKNOWN");
+    expect(recoveryStatus({ status: "SOMETHING_NEW" })).toBe("unknown");
+  });
+
+  it.each([
+    ["SUCCESS", true],
+    ["FAILURE", false],
+    ["", false],
+  ] as const)(
+    "verifies webhook signature only from PayPal status %s",
+    async (verificationStatus, expected) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ access_token: "fictional-token" }), {
+            status: 200,
+          })
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ verification_status: verificationStatus }),
+            {
+              status: 200,
+            }
+          )
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      const event = { id: "event-1", resource: { status: "COMPLETED" } };
+      const eventJson = JSON.stringify(event, null, 2);
+
+      await expect(
+        verifyPaypalWebhookSignature({
+          authAlgo: "SHA256withRSA",
+          certUrl: "https://api-m.sandbox.paypal.com/cert",
+          transmissionId: "transmission-1",
+          transmissionSig: "signature-1",
+          transmissionTime: "2026-11-03T00:00:00Z",
+          webhookId: "webhook-1",
+          eventJson,
+        })
+      ).resolves.toBe(expected);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const [url, options] = fetchMock.mock.calls[1];
+      expect(url).toBe(
+        "https://api-m.sandbox.paypal.com/v1/notifications/verify-webhook-signature"
+      );
+      expect(options.method).toBe("POST");
+      expect(String(options.body)).toContain(`"webhook_event":${eventJson}}`);
+      expect(JSON.parse(String(options.body))).toEqual({
+        auth_algo: "SHA256withRSA",
+        cert_url: "https://api-m.sandbox.paypal.com/cert",
+        transmission_id: "transmission-1",
+        transmission_sig: "signature-1",
+        transmission_time: "2026-11-03T00:00:00Z",
+        webhook_id: "webhook-1",
+        webhook_event: event,
+      });
+    }
+  );
+
+  it.each([
+    "http://api.sandbox.paypal.com/cert",
+    "https://api-m.paypal.com/cert",
+    "https://api.sandbox.paypal.com.attacker.example/cert",
+    "https://api.sandbox.paypal.com:8443/cert",
+    "https://user@api.sandbox.paypal.com/cert",
+  ])(
+    "rejects unsafe webhook cert %s before requesting OAuth",
+    async certUrl => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(
+        verifyPaypalWebhookSignature({
+          authAlgo: "SHA256withRSA",
+          certUrl,
+          transmissionId: "test",
+          transmissionSig: "test",
+          transmissionTime: "2026-11-03T00:00:00Z",
+          webhookId: "webhook-1",
+          eventJson: "{}",
+        })
+      ).rejects.toThrow("PAYPAL_INVALID_WEBHOOK_CERT");
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not leak verification provider errors or treat them as successful", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "fictional-token" }), {
+          status: 200,
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ name: "PRIVATE_PROVIDER_DETAIL" }), {
+          status: 500,
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      verifyPaypalWebhookSignature({
+        authAlgo: "SHA256withRSA",
+        certUrl: "https://api.sandbox.paypal.com/cert",
+        transmissionId: "test",
+        transmissionSig: "test",
+        transmissionTime: "2026-11-03T00:00:00Z",
+        webhookId: "webhook-1",
+        eventJson: "{}",
+      })
+    ).rejects.toThrow(/^PAYPAL_PROVIDER_REJECTED$/);
   });
 });

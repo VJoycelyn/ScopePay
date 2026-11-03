@@ -153,7 +153,21 @@ const mocks = vi.hoisted(() => {
         ],
       };
     }
-    return { id, status, purchase_units: [unit] };
+    return {
+      id,
+      status,
+      purchase_units: [unit],
+      ...(status === "PAYER_ACTION_REQUIRED"
+        ? {
+            links: [
+              {
+                rel: "payer-action",
+                href: `https://www.sandbox.paypal.com/checkoutnow?token=${id}`,
+              },
+            ],
+          }
+        : {}),
+    };
   };
 
   const paymentStatus = (payload: Record<string, unknown>) => {
@@ -170,6 +184,7 @@ const mocks = vi.hoisted(() => {
     if (statuses.includes("COMPLETED") || status === "COMPLETED")
       return "COMPLETED";
     if (statuses.includes("PENDING") || status === "PENDING") return "PENDING";
+    if (status === "PAYER_ACTION_REQUIRED") return "PAYER_ACTION_REQUIRED";
     if (["VOIDED", "DENIED", "FAILED"].includes(status)) return status;
     if (["APPROVED", "CREATED"].includes(status)) return status;
     return "UNKNOWN";
@@ -213,6 +228,12 @@ const mocks = vi.hoisted(() => {
         ? `https://www.sandbox.paypal.com/checkoutnow?token=${payload.id}`
         : null
     ),
+    extractPayerActionUrl: vi.fn((payload: Record<string, any>) => {
+      const action = Array.isArray(payload.links)
+        ? payload.links.find((link: any) => link?.rel === "payer-action")
+        : null;
+      return typeof action?.href === "string" ? action.href : null;
+    }),
     paypalOrderMatches: vi.fn((payload: Record<string, any>, expected: any) => {
       if (payload.id !== expected.paypalOrderId) return false;
       const units = Array.isArray(payload.purchase_units)
@@ -260,7 +281,8 @@ const mocks = vi.hoisted(() => {
     recoveryStatus: vi.fn((payload: Record<string, unknown>) => {
       const status = paymentStatus(payload);
       if (status === "COMPLETED") return "completed";
-      if (status === "PENDING") return "pending";
+      if (status === "PENDING" || status === "PAYER_ACTION_REQUIRED")
+        return "pending";
       if (["VOIDED", "DENIED", "FAILED"].includes(status)) return "retryable";
       return "unknown";
     }),
@@ -392,9 +414,12 @@ import { registerScopePayRoutes } from "./routes";
 
 let server: any;
 let baseUrl = "";
+let requestNumber = 0;
 
 beforeAll(async () => {
   const app = express();
+  // Test listener only: isolate rate buckets across independent mocked scenarios.
+  app.set("trust proxy", "loopback");
   app.use(express.json());
   registerScopePayRoutes(app);
   server = await new Promise<any>(resolve => {
@@ -413,6 +438,7 @@ async function post(path: string, body: unknown, owner = false) {
     method: "POST",
     headers: {
       "content-type": "application/json",
+      "x-forwarded-for": `192.0.2.${++requestNumber}`,
       ...(owner ? { "x-workspace-token": OWNER_TOKEN } : {}),
     },
     body: JSON.stringify(body),
@@ -751,6 +777,244 @@ describe("ScopePay accepted-version checkout routes", () => {
     expect(mocks.state.createCalls).toHaveLength(0);
   });
 
+  it("reuses an existing pending local order and validated payer-action link without creating", async () => {
+    mocks.reset();
+    const order = mocks.seedOrder({
+      paypal_order_id: "paypal-payer-action-prepare",
+      status: "pending",
+    });
+    const document = documentFromState();
+    document.status = "payment_pending";
+    document.paypalOrderId = order.paypal_order_id;
+    mocks.state.providers.set(
+      order.paypal_order_id,
+      mocks.providerPayload(
+        order.paypal_order_id,
+        "PAYER_ACTION_REQUIRED",
+        order.document_id,
+        order.document_version,
+        order.amount_cents
+      )
+    );
+
+    const result = await post(`/api/scopepay/client/${CLIENT_TOKEN}/orders`, {
+      version: 1,
+    });
+
+    expect(result.status).toBe(201);
+    expect(result.body.id).toBe(order.paypal_order_id);
+    expect(result.body.approvalUrl).toContain(order.paypal_order_id);
+    expect(mocks.paypal.getPaypalOrder).toHaveBeenCalledWith(
+      order.paypal_order_id
+    );
+    expect(mocks.state.createCalls).toHaveLength(0);
+    expect(mocks.state.captureCalls).toHaveLength(0);
+    expect(order.status).toBe("pending");
+  });
+
+  it("marks a locally created payer-action order pending during preparation and returns its gated review once", async () => {
+    mocks.reset();
+    const order = mocks.seedOrder({
+      paypal_order_id: "payer-action-from-created",
+      status: "created",
+    });
+    documentFromState().paypalOrderId = order.paypal_order_id;
+    mocks.state.providers.set(
+      order.paypal_order_id,
+      mocks.providerPayload(
+        order.paypal_order_id,
+        "PAYER_ACTION_REQUIRED",
+        order.document_id,
+        order.document_version,
+        order.amount_cents
+      )
+    );
+    const first = await post(`/api/scopepay/client/${CLIENT_TOKEN}/orders`, {
+      version: 1,
+    });
+    expect(first.status).toBe(201);
+    expect(first.body.review.document.status).toBe("payment_pending");
+    expect(first.body.review.document.paypalOrderId).toBe(
+      order.paypal_order_id
+    );
+    expect(first.body.review.paymentAction.kind).toBe("payer_action_required");
+    expect(order.status).toBe("pending");
+    expect(documentFromState().status).toBe("payment_pending");
+    const auditCount =
+      mocks.state.workspaceRow.documents.projects[0].audit.length;
+    const again = await post(`/api/scopepay/client/${CLIENT_TOKEN}/orders`, {
+      version: 1,
+    });
+    expect(again.status).toBe(201);
+    expect(mocks.state.workspaceRow.documents.projects[0].audit).toHaveLength(
+      auditCount
+    );
+    expect(mocks.state.createCalls).toHaveLength(0);
+    expect(mocks.state.captureCalls).toHaveLength(0);
+  });
+
+  it("returns payer-action metadata only after same-order GET verifies exact terms", async () => {
+    mocks.reset();
+    const order = mocks.seedOrder({
+      paypal_order_id: "paypal-payer-action-get",
+      status: "pending",
+    });
+    const document = documentFromState();
+    document.status = "payment_pending";
+    document.paypalOrderId = order.paypal_order_id;
+    mocks.state.providers.set(
+      order.paypal_order_id,
+      mocks.providerPayload(
+        order.paypal_order_id,
+        "PAYER_ACTION_REQUIRED",
+        order.document_id,
+        order.document_version,
+        order.amount_cents
+      )
+    );
+
+    const result = await get(
+      `/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}`
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body.paymentAction).toEqual({
+      kind: "payer_action_required",
+      approvalUrl: expect.stringContaining(order.paypal_order_id),
+    });
+    expect(result.body.document.status).toBe("payment_pending");
+    expect(mocks.state.captureCalls).toHaveLength(0);
+    expect(mocks.state.createCalls).toHaveLength(0);
+  });
+
+  it("rejects mismatched payer-action GET data before mutation and returns nullable unsafe-link action", async () => {
+    mocks.reset();
+    const order = mocks.seedOrder({
+      paypal_order_id: "paypal-payer-action-unsafe",
+      status: "pending",
+    });
+    const document = documentFromState();
+    document.status = "payment_pending";
+    document.paypalOrderId = order.paypal_order_id;
+    mocks.state.providers.set(
+      order.paypal_order_id,
+      mocks.providerPayload(
+        order.paypal_order_id,
+        "PAYER_ACTION_REQUIRED",
+        order.document_id,
+        order.document_version,
+        order.amount_cents - 1
+      )
+    );
+    const mismatch = await get(
+      `/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}`
+    );
+    expect(mismatch.status).toBe(409);
+    expect(mismatch.body.code).toBe("PAYMENT_MISMATCH");
+    expect(order.status).toBe("pending");
+    expect(document.status).toBe("payment_pending");
+
+    mocks.state.providers.set(
+      order.paypal_order_id,
+      mocks.providerPayload(
+        order.paypal_order_id,
+        "PAYER_ACTION_REQUIRED",
+        order.document_id,
+        order.document_version,
+        order.amount_cents
+      )
+    );
+    mocks.paypal.extractPayerActionUrl.mockReturnValueOnce(null);
+    const unsafe = await get(
+      `/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}`
+    );
+    expect(unsafe.status).toBe(200);
+    expect(unsafe.body.paymentAction).toEqual({
+      kind: "payer_action_required",
+      approvalUrl: null,
+    });
+  });
+
+  it("blocks capture before POST while payer action is required and preserves pending", async () => {
+    mocks.reset();
+    const order = mocks.seedOrder({
+      paypal_order_id: "paypal-payer-action-capture",
+      status: "pending",
+    });
+    const document = documentFromState();
+    document.status = "payment_pending";
+    document.paypalOrderId = order.paypal_order_id;
+    mocks.state.providers.set(
+      order.paypal_order_id,
+      mocks.providerPayload(
+        order.paypal_order_id,
+        "PAYER_ACTION_REQUIRED",
+        order.document_id,
+        order.document_version,
+        order.amount_cents
+      )
+    );
+
+    const result = await post(
+      `/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}/capture`,
+      {}
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe("PAYER_ACTION_REQUIRED");
+    expect(result.body.approvalUrl).toContain(order.paypal_order_id);
+    expect(mocks.state.captureCalls).toHaveLength(0);
+    expect(mocks.state.createCalls).toHaveLength(0);
+    expect(order.status).toBe("pending");
+    expect(document.status).toBe("payment_pending");
+  });
+
+  it("re-reads after a 422 payer-action capture failure and returns only matching GET action", async () => {
+    mocks.reset();
+    const order = mocks.seedOrder({
+      paypal_order_id: "paypal-payer-action-422",
+      status: "created",
+    });
+    const document = documentFromState();
+    document.paypalOrderId = order.paypal_order_id;
+    mocks.state.providers.set(
+      order.paypal_order_id,
+      mocks.providerPayload(
+        order.paypal_order_id,
+        "APPROVED",
+        order.document_id,
+        order.document_version,
+        order.amount_cents
+      )
+    );
+    mocks.paypal.capturePaypalOrder.mockImplementationOnce(async id => {
+      mocks.state.captureCalls.push(id);
+      mocks.state.providers.set(
+        id,
+        mocks.providerPayload(
+          id,
+          "PAYER_ACTION_REQUIRED",
+          order.document_id,
+          order.document_version,
+          order.amount_cents
+        )
+      );
+      throw new Error("PAYPAL_PAYER_ACTION_REQUIRED");
+    });
+
+    const result = await post(
+      `/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}/capture`,
+      {}
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe("PAYER_ACTION_REQUIRED");
+    expect(result.body.approvalUrl).toContain(order.paypal_order_id);
+    expect(mocks.state.captureCalls).toEqual([order.paypal_order_id]);
+    expect(order.status).toBe("pending");
+    expect(documentFromState().status).toBe("payment_pending");
+  });
+
   it("does not mark paid on same-order GET when a completed capture has the wrong amount", async () => {
     mocks.reset();
     const order = mocks.seedOrder({
@@ -852,6 +1116,35 @@ describe("ScopePay accepted-version checkout routes", () => {
     expect(mocks.state.captureCalls).toHaveLength(0);
     expect(order.status).toBe("created");
     expect(order.paypal_order_id).toBe("paypal-created-1");
+  });
+
+  it("does not replace an owner order while the provider requires payer action", async () => {
+    mocks.reset();
+    const order = mocks.seedOrder({
+      paypal_order_id: "paypal-owner-payer-action",
+    });
+    mocks.state.providers.set(
+      order.paypal_order_id,
+      mocks.providerPayload(
+        order.paypal_order_id,
+        "PAYER_ACTION_REQUIRED",
+        order.document_id,
+        order.document_version,
+        order.amount_cents
+      )
+    );
+    const before = snapshot();
+    const result = await post(
+      "/api/scopepay/projects/project-1/documents/quote-1/orders/reissue",
+      { version: 1, confirmedNoPayment: true },
+      true
+    );
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe("PAYMENT_PENDING");
+    expect(mocks.state.createCalls).toHaveLength(0);
+    expect(mocks.state.captureCalls).toHaveLength(0);
+    expect(snapshot()).toEqual(before);
+    expect(order.paypal_order_id).toBe("paypal-owner-payer-action");
   });
 
   it("does not replace an owner order while the provider reports pending", async () => {

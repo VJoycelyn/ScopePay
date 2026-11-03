@@ -49,6 +49,7 @@ import {
   completedCapture,
   createPaypalOrder,
   extractApprovalUrl,
+  extractPayerActionUrl,
   getPaypalOrder,
   paypalClientId,
   paypalConfigured,
@@ -189,6 +190,18 @@ function safeProviderStatus(error: unknown): {
       message:
         "Payment is pending verification; verify payment before retrying",
       code: "PAYMENT_PENDING",
+    };
+  if (message === "PAYER_ACTION_REQUIRED")
+    return {
+      status: 409,
+      message: "PayPal requires buyer action before capture",
+      code: "PAYER_ACTION_REQUIRED",
+    };
+  if (message === "PAYPAL_PAYER_ACTION_REQUIRED")
+    return {
+      status: 409,
+      message: "PayPal requires buyer action before capture",
+      code: "PAYER_ACTION_REQUIRED",
     };
   if (message === "PAYMENT_UNKNOWN")
     return {
@@ -345,7 +358,8 @@ function makeDocument(args: {
 }
 function publicReview(
   project: ScopeProject,
-  document: ScopeDocument
+  document: ScopeDocument,
+  paymentAction?: { kind: "payer_action_required"; approvalUrl: string | null }
 ): ClientReview {
   const safe: ScopeDocument = {
     id: document.id,
@@ -375,6 +389,7 @@ function publicReview(
     sandbox: true,
     merchantNotice:
       "Sandbox payment to one configured merchant; no escrow or production money movement.",
+    ...(paymentAction ? { paymentAction } : {}),
   };
 }
 function documentFromProject(
@@ -413,6 +428,8 @@ router.get("/status", async (_req, res) => {
   res.json({
     aiConfigured: aiConfigured(),
     paypalConfigured: paypalConfigured(),
+    paypalWebhookConfigured:
+      paypalConfigured() && Boolean(process.env.PAYPAL_WEBHOOK_ID?.trim()),
     databaseConfigured: await databaseReady(),
     paypalClientId: paypalClientId(),
     aiModel: SCOPEPAY_MODEL,
@@ -1373,7 +1390,8 @@ router.post(
           if (
             state === "PENDING" ||
             state === "CREATED" ||
-            state === "APPROVED"
+            state === "APPROVED" ||
+            String(state) === "PAYER_ACTION_REQUIRED"
           )
             throw new Error("PAYMENT_PENDING");
           if (state !== "VOIDED" && state !== "DENIED" && state !== "FAILED")
@@ -1547,6 +1565,7 @@ router.post("/client/:token/orders", async (req, res) => {
   let order: {
     localId: string;
     paypalOrderId: string | null;
+    isNew: boolean;
     requestId: string;
     approvalUrl: string | null;
     amountCents: number;
@@ -1554,6 +1573,7 @@ router.post("/client/:token/orders", async (req, res) => {
     documentId: string;
     version: number;
   };
+  let actionReview: ClientReview | undefined;
   try {
     order = await withTokenLock(
       client.hash,
@@ -1587,16 +1607,16 @@ router.post("/client/:token/orders", async (req, res) => {
             throw new Error("PAYMENT_MISMATCH");
           if (existing.capture_id || existing.status === "captured")
             throw new Error("PAYMENT_PENDING");
-          if (existing.status !== "creating" && existing.status !== "created")
-            throw new Error(
-              existing.status === "pending"
-                ? "PAYMENT_PENDING"
-                : "ORDER_NOT_READY"
-            );
+          if (existing.status === "pending") {
+            if (!existing.paypal_order_id) throw new Error("ORDER_NOT_READY");
+          } else if (existing.status !== "created") {
+            throw new Error("ORDER_NOT_READY");
+          }
           return {
             value: {
               localId: existing.id,
               paypalOrderId: existing.paypal_order_id,
+              isNew: false as boolean,
               requestId: existing.request_id,
               approvalUrl: null,
               amountCents: existing.amount_cents,
@@ -1635,6 +1655,7 @@ router.post("/client/:token/orders", async (req, res) => {
           value: {
             localId,
             paypalOrderId: null,
+            isNew: true as boolean,
             requestId,
             approvalUrl: null,
             amountCents: document.totalCents,
@@ -1661,16 +1682,44 @@ router.post("/client/:token/orders", async (req, res) => {
         })
       )
         throw new Error("PAYMENT_MISMATCH");
-      const savedStatus = paypalPaymentStatus(savedPayload);
-      if (savedStatus !== "CREATED" && savedStatus !== "APPROVED")
+      const savedStatus: string = paypalPaymentStatus(savedPayload);
+      if (
+        savedStatus !== "CREATED" &&
+        savedStatus !== "APPROVED" &&
+        savedStatus !== "PAYER_ACTION_REQUIRED"
+      )
         throw new Error(
           savedStatus === "PENDING" ? "PAYMENT_PENDING" : "ORDER_NOT_READY"
         );
-      order.approvalUrl = extractApprovalUrl(savedPayload);
-    } else {
-      // A concurrent request may observe the creating lease. Reusing its
-      // persisted request_id is intentional: PayPal idempotency prevents two
-      // provider orders while the first request is uncertain.
+      order.approvalUrl =
+        savedStatus === "PAYER_ACTION_REQUIRED"
+          ? extractPayerActionUrl(savedPayload)
+          : extractApprovalUrl(savedPayload);
+      if (savedStatus === "PAYER_ACTION_REQUIRED") {
+        await markPaymentPending(
+          client.hash,
+          order.localId,
+          order.paypalOrderId
+        );
+        const context = await loadPublicContext(client.hash);
+        if (
+          !context ||
+          context.document.status !== "payment_pending" ||
+          context.document.paypalOrderId !== order.paypalOrderId ||
+          context.document.id !== order.documentId ||
+          context.document.version !== order.version ||
+          context.document.totalCents !== order.amountCents ||
+          context.document.currency !== "USD"
+        )
+          throw new Error("ORDER_NOT_READY");
+        actionReview = publicReview(context.project, context.document, {
+          kind: "payer_action_required",
+          approvalUrl: order.approvalUrl,
+        });
+      }
+    } else if (order.isNew) {
+      // Only the request holding the newly persisted creation lease calls PayPal.
+      // Concurrent/uncertain attempts stay blocked; never replace that lease.
       const created = await createPaypalOrder({
         amountCents: order.amountCents,
         localReference: `${order.projectId}:${order.documentId}:${order.version}`,
@@ -1728,10 +1777,11 @@ router.post("/client/:token/orders", async (req, res) => {
       );
       order.paypalOrderId = created.id;
       order.approvalUrl = created.approvalUrl;
-    }
+    } else throw new Error("ORDER_NOT_READY");
     res.status(201).json({
       id: order.paypalOrderId || order.localId,
       approvalUrl: order.approvalUrl,
+      ...(actionReview ? { review: actionReview } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -2048,6 +2098,17 @@ function paymentStatusError(status: ReturnType<typeof paypalPaymentStatus>): {
   };
 }
 
+function sendPayerActionRequired(
+  res: Response,
+  approvalUrl: string | null
+): void {
+  res.status(409).json({
+    error: "PayPal requires buyer action before capture",
+    code: "PAYER_ACTION_REQUIRED",
+    approvalUrl,
+  });
+}
+
 router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
   const trace = createPaymentTrace(req, res);
   trace.info("capture.route_enter", {
@@ -2207,6 +2268,8 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
         pending.paypalOrderId,
         captureClaimed
       );
+      if (String(paypalPaymentStatus(before)) === "PAYER_ACTION_REQUIRED")
+        return sendPayerActionRequired(res, extractPayerActionUrl(before));
       const result = paymentStatusError(paypalPaymentStatus(before));
       return sendError(res, 409, result.message, result.code);
     }
@@ -2356,6 +2419,18 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
       try {
         trace.info("capture.reconcile_start");
         const reconciled = await getPaypalOrder(pending.paypalOrderId);
+        const expected = {
+          amountCents: pending.amountCents,
+          reference: pending.reference,
+          paypalOrderId: pending.paypalOrderId,
+        };
+        if (!paypalOrderMatches(reconciled, expected))
+          return sendError(
+            res,
+            409,
+            "Payment verification did not match the stored order",
+            "PAYMENT_MISMATCH"
+          );
         const status = recoveryStatus(reconciled);
         trace.info("capture.reconcile_result", {
           providerStatus: paypalPaymentStatus(reconciled),
@@ -2408,6 +2483,20 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
             409,
             "PayPal has no completed or pending capture; retry the accepted order",
             "PAYMENT_RETRY"
+          );
+        }
+        if (
+          String(paypalPaymentStatus(reconciled)) === "PAYER_ACTION_REQUIRED"
+        ) {
+          await markPaymentPending(
+            client.hash,
+            pending.localId,
+            pending.paypalOrderId,
+            captureClaimed
+          );
+          return sendPayerActionRequired(
+            res,
+            extractPayerActionUrl(reconciled)
           );
         }
         await markPaymentPending(
@@ -2514,6 +2603,13 @@ router.get("/client/:token/orders/:orderId", async (req, res) => {
           reference: `${order.project_id}:${order.document_id}:${order.document_version}`,
           paypalOrderId: order.paypal_order_id,
         };
+        if (!paypalOrderMatches(payload, expected))
+          return sendError(
+            res,
+            409,
+            "PayPal order does not match the accepted scope",
+            "PAYMENT_MISMATCH"
+          );
         const completed = completedCapture(payload, expected);
         if (completed) {
           await markPaymentCapturing(
@@ -2531,21 +2627,31 @@ router.get("/client/:token/orders/:orderId", async (req, res) => {
           if (fresh)
             return res.json(publicReview(fresh.project, fresh.document));
         }
-        if (!paypalOrderMatches(payload, expected))
-          return sendError(
-            res,
-            409,
-            "PayPal order does not match the accepted scope",
-            "PAYMENT_MISMATCH"
-          );
         const status = recoveryStatus(payload);
-        if (status === "pending")
+        if (status === "pending") {
           await markPaymentPending(
             client.hash,
             order.id,
             order.paypal_order_id
           );
-        else if (
+          if (
+            String(paypalPaymentStatus(payload)) === "PAYER_ACTION_REQUIRED"
+          ) {
+            const action = {
+              kind: "payer_action_required" as const,
+              approvalUrl: extractPayerActionUrl(payload),
+            };
+            const actionContext = await loadPublicContext(client.hash);
+            if (actionContext)
+              return res.json(
+                publicReview(
+                  actionContext.project,
+                  actionContext.document,
+                  action
+                )
+              );
+          }
+        } else if (
           status === "retryable" ||
           paypalPaymentStatus(payload) === "CREATED"
         )

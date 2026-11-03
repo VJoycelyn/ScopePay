@@ -358,3 +358,133 @@ describe("ScopePay mock-scenario API request", () => {
     }
   );
 });
+
+describe("PayPal same-order buyer-action response safety", () => {
+  const actionUrl =
+    "https://www.sandbox.paypal.com/checkoutnow?token=saved-order-1";
+  const pendingReview = (approvalUrl: unknown = actionUrl) => ({
+    projectName: "Fictional project",
+    clientName: "Fictional buyer",
+    sandbox: true,
+    document: {
+      id: "doc-1",
+      version: 2,
+      totalCents: 1250,
+      currency: "USD",
+      status: "payment_pending",
+      deliverables: [],
+      exclusions: [],
+      paypalOrderId: "saved-order-1",
+    },
+    paymentAction: { kind: "payer_action_required", approvalUrl },
+  });
+
+  it("accepts a server-confirmed pending review returned by preparation", async () => {
+    const result = {
+      id: "saved-order-1",
+      approvalUrl: actionUrl,
+      review: pendingReview(),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(result, 201))
+    );
+    await expect(scopepayApi.createOrder(CLIENT_TOKEN, 2)).resolves.toEqual(
+      result
+    );
+  });
+
+  it("rejects preparation review metadata for a different order", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            id: "another-order",
+            approvalUrl: actionUrl,
+            review: pendingReview(),
+          },
+          201
+        )
+      )
+    );
+    const error = await rejected(scopepayApi.createOrder(CLIENT_TOKEN, 2));
+    expect(error.code).toBe("INVALID_RESPONSE");
+  });
+
+  it("preserves a safe action URL only for PAYER_ACTION_REQUIRED without trusting error text", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          code: "PAYER_ACTION_REQUIRED",
+          error: "private payload must not leak",
+          approvalUrl: actionUrl,
+        },
+        409
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const error = await rejected(
+      scopepayApi.captureOrder(CLIENT_TOKEN, LOCAL_ORDER_ID)
+    );
+    expect(error.code).toBe("PAYER_ACTION_REQUIRED");
+    expect(error.approvalUrl).toBe(actionUrl);
+    expect(error.message).toContain("buyer step on this same order");
+    expect(error.message).not.toContain("private payload");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "https://www.paypal.com/checkoutnow",
+    "https://www.sandbox.paypal.com.evil.example",
+    "http://www.sandbox.paypal.com/checkoutnow",
+  ])("strips unsafe action URL %s from an error", async approvalUrl => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ code: "PAYER_ACTION_REQUIRED", approvalUrl }, 409)
+        )
+    );
+    const error = await rejected(
+      scopepayApi.captureOrder(CLIENT_TOKEN, LOCAL_ORDER_ID)
+    );
+    expect(error.code).toBe("PAYER_ACTION_REQUIRED");
+    expect(error.approvalUrl).toBeNull();
+  });
+
+  it("accepts a matched pending review's explicit action link through GET only", async () => {
+    const review = pendingReview();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(review));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      scopepayApi.reconcileOrder(CLIENT_TOKEN, PROVIDER_ORDER_ID)
+    ).resolves.toEqual(review);
+    expect(fetchMock.mock.calls[0][1].method).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["https://evil.example", 123, undefined])(
+    "rejects malformed action data in a successful review: %s",
+    async approvalUrl => {
+      const review = pendingReview(approvalUrl);
+      if (approvalUrl === undefined)
+        (review.paymentAction as any).approvalUrl = undefined;
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(review)));
+      const error = await rejected(
+        scopepayApi.reconcileOrder(CLIENT_TOKEN, PROVIDER_ORDER_ID)
+      );
+      expect(error.code).toBe("INVALID_RESPONSE");
+    }
+  );
+
+  it("rejects an action hint attached to a paid review even with capture proof", async () => {
+    const review = pendingReview() as any;
+    review.document.status = "paid";
+    review.document.paypalCaptureId = "verified-capture";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(review)));
+    const error = await rejected(scopepayApi.clientReview(CLIENT_TOKEN));
+    expect(error.code).toBe("INVALID_RESPONSE");
+  });
+});

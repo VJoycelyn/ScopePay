@@ -84,6 +84,54 @@ export function SetupPage() {
         <div className="setup-notice">
           <Info size={18} />
           <div>
+            <strong>Buyer action required is not a failed payment</strong>
+            <p>
+              If PayPal asks for another buyer step, verify the same saved
+              order, open its PayPal Sandbox link, finish the requested action
+              with a Sandbox Personal buyer, and allow PayPal to return to
+              ScopePay. Approval alone is not a completed capture. Do not create
+              a replacement.
+            </p>
+          </div>
+        </div>
+        <div className="setup-notice">
+          <Info size={18} />
+          <div>
+            <strong>Optional signed PayPal notifications</strong>
+            <p>
+              {status?.paypalWebhookConfigured
+                ? "A webhook ID is configured. This alone does not prove a signed event has been delivered."
+                : "Not configured. Standard checkout still uses server capture and same-order GET verification."}
+            </p>
+            <ol>
+              <li>
+                In PayPal Developer Dashboard, select Sandbox → Apps &
+                Credentials → the same REST app used by ScopePay.
+              </li>
+              <li>
+                Add a webhook URL:{" "}
+                <code>
+                  https://scopepay.manus.space/api/scopepay/paypal/webhook
+                </code>
+                .
+              </li>
+              <li>
+                Subscribe to <code>PAYMENT.CAPTURE.COMPLETED</code>. Save its
+                webhook ID as <code>PAYPAL_WEBHOOK_ID</code> in the server’s
+                protected environment settings, then redeploy.
+              </li>
+            </ol>
+            <p>
+              The handler verifies PayPal’s signature and independently checks
+              the saved order’s completed capture. It never approves a buyer,
+              creates an order, or initiates capture. Keep credentials out of
+              chat.
+            </p>
+          </div>
+        </div>
+        <div className="setup-notice">
+          <Info size={18} />
+          <div>
             <strong>Prototype boundaries</strong>
             <p>
               Do not enter sensitive client data. ScopePay does not provide

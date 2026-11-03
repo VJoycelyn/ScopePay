@@ -52,6 +52,8 @@ Do not use Live credentials. Do not commit `.env` or secret values. `SCOPEPAY_PU
 
 Example variable names are listed in [`.env.example`](.env.example). They intentionally have no values.
 
+If PayPal reports buyer action required, continue the same saved order instead of creating a replacement. The optional signed webhook listener also requires its own `PAYPAL_WEBHOOK_ID`; it is not needed for Standard checkout capture and is disabled until configured. See [buyer-action recovery and webhook setup](docs/PAYER_ACTION_AND_WEBHOOKS.md) for the implemented flow and the remaining live verification steps.
+
 ## Judge quick start
 
 The live hosted demo is [ScopePay on Manus](https://scopepay.manus.space); this is the verified ScopePay-branded hostname. The application uses a managed database and private AI runtime, so cloning/building the public source by itself is not a turnkey judge environment. Verify the hosted app and its testing access in a fresh browser before submission. See [the step-by-step ScopePay completion guide](docs/ScopePay-Completion-Guide.md) for the exact Sandbox walkthrough and remaining requirements.

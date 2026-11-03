@@ -9,6 +9,7 @@ import type {
   ServiceStatus,
   Workspace,
 } from "@shared/scopepay";
+import { safeSandboxApprovalUrl } from "./paypal-safety";
 
 const API_ROOT = "/api/scopepay";
 const TOKEN_KEY = "scopepay.workspace.token";
@@ -21,6 +22,7 @@ type RequestOptions = { capture?: boolean };
 export type CreateOrderResult = {
   id: string;
   approvalUrl: string | null;
+  review?: ClientReview;
 };
 
 export type ReissueOrderResult = {
@@ -31,6 +33,7 @@ export type ReissueOrderResult = {
 export class ScopePayApiError extends Error {
   code?: string;
   status: number;
+  approvalUrl?: string | null;
   constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "ScopePayApiError";
@@ -73,6 +76,7 @@ const SAFE_BACKEND_CODES = new Set([
   "ORDER_SUPERSEDED",
   "PAYMENT_MISMATCH",
   "PAYMENT_PENDING",
+  "PAYER_ACTION_REQUIRED",
   "PAYMENT_RETRY",
   "PAYMENT_UNAVAILABLE",
   "PAYMENT_UNKNOWN",
@@ -106,6 +110,8 @@ const SAFE_ERROR_MESSAGES: Record<string, string> = {
   PAYMENT_MISMATCH: "Payment verification did not match the stored order.",
   PAYMENT_PENDING:
     "Payment is pending verification; verify payment before trying again.",
+  PAYER_ACTION_REQUIRED:
+    "PayPal requires a buyer step on this same order. Open PayPal Sandbox, complete the requested action, then return to ScopePay. Payment is not yet confirmed.",
   PAYMENT_RETRY:
     "The payment was not completed; the accepted order can be tried again.",
   PAYMENT_UNKNOWN:
@@ -263,13 +269,20 @@ async function request<T>(
         : [502, 503, 504].includes(response.status)
           ? "SERVICE_UNAVAILABLE"
           : "API_ERROR");
-    throw new ScopePayApiError(safeMessage(code), response.status, code);
+    const error = new ScopePayApiError(
+      safeMessage(code),
+      response.status,
+      code
+    );
+    if (code === "PAYER_ACTION_REQUIRED")
+      error.approvalUrl = safeSandboxApprovalUrl(payload.approvalUrl);
+    throw error;
   }
   return payload as T;
 }
 
 function validateApprovalUrl(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
+  return value === null || safeSandboxApprovalUrl(value) !== null;
 }
 
 function isScopeProject(value: unknown): value is JsonObject {
@@ -297,6 +310,17 @@ function validateCreateOrderResult(value: unknown): CreateOrderResult {
     !validateApprovalUrl(value.approvalUrl)
   )
     throw invalidResponseError(200, false);
+  if (value.review !== undefined) {
+    const review = validateClientReview(value.review);
+    if (
+      review.document.status !== "payment_pending" ||
+      review.document.paypalOrderId !== value.id ||
+      review.paymentAction?.kind !== "payer_action_required" ||
+      review.paymentAction.approvalUrl !== value.approvalUrl
+    )
+      throw invalidResponseError(200, false);
+    return { id: value.id, approvalUrl: value.approvalUrl, review };
+  }
   return { id: value.id, approvalUrl: value.approvalUrl };
 }
 
@@ -353,6 +377,20 @@ function validateClientReview(value: unknown): ClientReview {
     (!nonEmptyString(doc.paypalOrderId) || !nonEmptyString(doc.paypalCaptureId))
   )
     throw unknownPaymentError();
+  if (value.paymentAction !== undefined) {
+    const action = value.paymentAction;
+    if (
+      !isJsonObject(action) ||
+      action.kind !== "payer_action_required" ||
+      doc.status !== "payment_pending" ||
+      !nonEmptyString(doc.paypalOrderId) ||
+      !(
+        action.approvalUrl === null ||
+        safeSandboxApprovalUrl(action.approvalUrl)
+      )
+    )
+      throw invalidResponseError(200, false);
+  }
   return value as unknown as ClientReview;
 }
 

@@ -264,7 +264,11 @@ export function PayPalCheckout({
   review: ClientReview;
   status: ServiceStatus | null;
   onReview: (review: ClientReview) => void;
-  externalError?: { message: string; code?: string } | null;
+  externalError?: {
+    message: string;
+    code?: string;
+    approvalUrl?: string | null;
+  } | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [sdkReady, setSdkReady] = useState(false);
@@ -283,7 +287,15 @@ export function PayPalCheckout({
     isUnavailableClientLinkCode(externalError?.code)
   );
   const [orderId, setOrderId] = useState(review.document.paypalOrderId ?? "");
-  const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
+  const [approvalUrl, setApprovalUrl] = useState<string | null>(
+    safeSandboxApprovalUrl(
+      review.paymentAction?.approvalUrl ?? externalError?.approvalUrl
+    )
+  );
+  const [payerActionRequired, setPayerActionRequired] = useState(
+    review.paymentAction?.kind === "payer_action_required" ||
+      externalError?.code === "PAYER_ACTION_REQUIRED"
+  );
   const paymentErrorRef = useRef("");
   const orderIdRef = useRef(orderId);
   const verifiedPaidRef = useRef(review.document.status === "paid");
@@ -309,6 +321,13 @@ export function PayPalCheckout({
     if (review.document.status === "paid") verifiedPaidRef.current = true;
   }, [review.document.status]);
 
+  useEffect(() => {
+    if (verifiedPaidRef.current || !review.paymentAction) return;
+    sdkGenerationRef.current += 1;
+    setPayerActionRequired(true);
+    setApprovalUrl(safeSandboxApprovalUrl(review.paymentAction.approvalUrl));
+  }, [review.paymentAction?.kind, review.paymentAction?.approvalUrl]);
+
   // A missing-order error on the direct PayPal return must gate SDK checkout
   // too, rather than remaining a disconnected notice above working buttons.
   useEffect(() => {
@@ -323,11 +342,16 @@ export function PayPalCheckout({
       reviewLinkUnavailableRef.current = true;
       setReviewLinkUnavailable(true);
     }
+    if (externalError.code === "PAYER_ACTION_REQUIRED") {
+      sdkGenerationRef.current += 1;
+      setPayerActionRequired(true);
+      setApprovalUrl(safeSandboxApprovalUrl(externalError.approvalUrl));
+    }
     paymentErrorRef.current = externalError.message;
     setPaymentError(externalError.message);
     setPaymentErrorCode(externalError.code);
     setPaymentState("error");
-  }, [externalError?.message, externalError?.code]);
+  }, [externalError?.message, externalError?.code, externalError?.approvalUrl]);
 
   useEffect(() => {
     if (
@@ -368,13 +392,22 @@ export function PayPalCheckout({
     setPaymentErrorCode(undefined);
   };
 
-  const showPaymentError = (message: string, code?: string) => {
+  const showPaymentError = (
+    message: string,
+    code?: string,
+    actionUrl?: string | null
+  ) => {
     if (code === "PAYPAL_ORDER_NOT_FOUND" || code === "ORDER_NOT_FOUND")
       sdkGenerationRef.current += 1;
     if (isUnavailableClientLinkCode(code)) {
       sdkGenerationRef.current += 1;
       reviewLinkUnavailableRef.current = true;
       setReviewLinkUnavailable(true);
+    }
+    if (code === "PAYER_ACTION_REQUIRED") {
+      sdkGenerationRef.current += 1;
+      setPayerActionRequired(true);
+      setApprovalUrl(safeSandboxApprovalUrl(actionUrl));
     }
     paymentErrorRef.current = message;
     setPaymentError(message);
@@ -403,6 +436,26 @@ export function PayPalCheckout({
         review.document.version
       );
       if (!isCurrent() || verifiedPaidRef.current) return null;
+      if (result.review) {
+        const next = result.review;
+        if (
+          next.document.id !== review.document.id ||
+          next.document.version !== review.document.version ||
+          next.document.totalCents !== review.document.totalCents ||
+          next.document.currency !== review.document.currency ||
+          next.document.paypalOrderId !== result.id ||
+          next.document.status !== "payment_pending" ||
+          next.paymentAction?.kind !== "payer_action_required"
+        )
+          throw new ScopePayApiError(
+            "The prepared order does not match these terms.",
+            409,
+            "PAYMENT_MISMATCH"
+          );
+        sdkGenerationRef.current += 1;
+        setPayerActionRequired(true);
+        onReview(next);
+      }
       setOrderId(result.id);
       orderIdRef.current = result.id;
       const safeUrl = safeSandboxApprovalUrl(result.approvalUrl);
@@ -415,11 +468,16 @@ export function PayPalCheckout({
         );
       }
       setPaymentState("idle");
-      return result;
+      // Do not return an action-required order to a stale SDK createOrder callback.
+      return result.review ? null : result;
     } catch (error) {
       if (!isCurrent() || verifiedPaidRef.current) return null;
       setPaymentState("error");
-      showPaymentError(errorMessage(error), errorCode(error));
+      showPaymentError(
+        errorMessage(error),
+        errorCode(error),
+        error instanceof ScopePayApiError ? error.approvalUrl : null
+      );
       return null;
     }
   };
@@ -493,7 +551,11 @@ export function PayPalCheckout({
     } catch (error) {
       if (!isCurrent() || verifiedPaidRef.current) return { success: false };
       setPaymentState("error");
-      showPaymentError(errorMessage(error), errorCode(error));
+      showPaymentError(
+        errorMessage(error),
+        errorCode(error),
+        error instanceof ScopePayApiError ? error.approvalUrl : null
+      );
       logPayPal("error", "capture.failed", {
         ...captureFields,
         success: false,
@@ -516,10 +578,36 @@ export function PayPalCheckout({
     clearPaymentError();
     try {
       const latest = await scopepayApi.reconcileOrder(token, orderId);
+      if (
+        latest.document.id !== review.document.id ||
+        latest.document.version !== review.document.version ||
+        latest.document.totalCents !== review.document.totalCents ||
+        latest.document.currency !== review.document.currency ||
+        latest.document.paypalOrderId !== orderId
+      )
+        throw new ScopePayApiError(
+          "The verification did not match this accepted order.",
+          409,
+          "PAYMENT_MISMATCH"
+        );
       if (latest.document.status === "paid") verifiedPaidRef.current = true;
+      const requiresAction =
+        latest.paymentAction?.kind === "payer_action_required";
+      setPayerActionRequired(requiresAction);
+      setApprovalUrl(
+        requiresAction
+          ? safeSandboxApprovalUrl(latest.paymentAction?.approvalUrl)
+          : null
+      );
       onReview(latest);
-      setPaymentState(latest.document.status === "paid" ? "paid" : "error");
-      if (latest.document.status !== "paid")
+      setPaymentState(
+        latest.document.status === "paid"
+          ? "paid"
+          : requiresAction
+            ? "idle"
+            : "error"
+      );
+      if (latest.document.status !== "paid" && !requiresAction)
         showPaymentError(
           "Payment is not confirmed yet. The server remains authoritative; do not create a replacement while this order is pending."
         );
@@ -609,6 +697,45 @@ export function PayPalCheckout({
     }
   };
 
+  const payerActionGuide =
+    payerActionRequired && !orderUnavailable ? (
+      <section className="payer-action-guide" role="status" aria-live="polite">
+        <strong>PayPal needs one more buyer step</strong>
+        <p>
+          This same {formatMoney(review.document.totalCents)} USD order needs
+          action in PayPal Sandbox. It is not a failed payment or a completed
+          capture.
+        </p>
+        <ol>
+          <li>
+            Open the PayPal Sandbox checkout link below and sign in with a
+            Sandbox Personal buyer, not the merchant or a live PayPal account.
+          </li>
+          <li>
+            Complete PayPal’s requested review or approval. The accepted scope,
+            version, and amount stay unchanged.
+          </li>
+          <li>
+            Allow PayPal to return you to ScopePay so the server can complete
+            and verify capture. If you stay in the original tab, verify this
+            same order first, then use Retry capture only after the buyer-action
+            notice clears.
+          </li>
+          <li>
+            The completion receipt appears only after the server verifies the
+            matching completed capture.
+          </li>
+        </ol>
+        {!approvalUrl && (
+          <p>
+            No safe action link is available yet. Use “Prepare PayPal Sandbox
+            checkout” to retrieve this same saved order’s link. If it remains
+            unavailable, contact the owner; do not create a replacement.
+          </p>
+        )}
+      </section>
+    ) : null;
+
   const recoveryGuide = (
     <>
       <SandboxRecoveryGuide
@@ -644,6 +771,7 @@ export function PayPalCheckout({
       !window.paypal ||
       reviewLinkUnavailable ||
       orderUnavailable ||
+      payerActionRequired ||
       review.document.status !== "accepted"
     )
       return;
@@ -733,6 +861,7 @@ export function PayPalCheckout({
     review.document.currency,
     reviewLinkUnavailable,
     orderUnavailable,
+    payerActionRequired,
   ]);
 
   if (review.document.status === "paid" || paymentState === "paid")
@@ -788,10 +917,12 @@ export function PayPalCheckout({
           <ShieldCheck size={18} />
         </div>
         <p className="action-note">
-          The server has not declared this payment failed. Verify the saved
-          PayPal order before trying capture again.
+          {payerActionRequired
+            ? "Complete the buyer step in PayPal Sandbox on this same order before capture can finish."
+            : "The server has not declared this payment failed. Verify the saved PayPal order before trying capture again."}
         </p>
         {renderPaymentProgress(review, false)}
+        {payerActionGuide}
         {paymentError && (
           <div className="inline-message error">
             <XCircle size={14} />
@@ -819,7 +950,7 @@ export function PayPalCheckout({
               {paymentState === "recovering" ? "Verifying…" : "Verify payment"}
             </button>
           )}
-          {!orderUnavailable && (
+          {!orderUnavailable && !payerActionRequired && (
             <button
               className="primary-button"
               disabled={paymentState === "capturing" || !orderId}
@@ -906,6 +1037,7 @@ export function PayPalCheckout({
           <span>{sdkError}</span>
         </div>
       )}
+      {payerActionGuide}
       {!sdkError && !sdkReady && (
         <div className="checkout-loading">
           <LoaderCircle size={15} className="spin" />
@@ -919,7 +1051,9 @@ export function PayPalCheckout({
           <div
             ref={containerRef}
             className={
-              sdkReady && !sdkError ? "paypal-buttons" : "paypal-buttons hidden"
+              sdkReady && !sdkError && !payerActionRequired
+                ? "paypal-buttons"
+                : "paypal-buttons hidden"
             }
           />
           <div className="direct-paypal-actions">
@@ -966,7 +1100,7 @@ export function PayPalCheckout({
         <div className="checkout-state">
           <LoaderCircle size={14} className="spin" />
           {paymentState === "creating"
-            ? "Creating a server order…"
+            ? "Preparing the server-validated order…"
             : "Verifying capture…"}
         </div>
       )}

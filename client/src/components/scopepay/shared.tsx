@@ -44,6 +44,8 @@ const SAFE_SCOPEPAY_ERROR_MESSAGES: Record<string, string> = {
     "This PayPal Sandbox order is unavailable. Follow the recovery steps below; payment status is not confirmed.",
   ORDER_PENDING:
     "PayPal still shows this order as pending. No payment was recorded; do not create a replacement until the server says it is safe.",
+  PAYER_ACTION_REQUIRED:
+    "PayPal needs a buyer step on this same order. Complete it in PayPal Sandbox, then return here. No completed capture is confirmed yet.",
   PAYMENT_MISMATCH:
     "PayPal could not verify this order for the accepted version and amount. No payment was recorded.",
   PAYMENT_UNKNOWN:

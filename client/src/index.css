@@ -2743,3 +2743,29 @@ textarea {
     min-height: 0;
   }
 }
+
+.payer-action-guide {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #b9c9e9;
+  border-radius: 8px;
+  background: #f2f6ff;
+  color: #243452;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.payer-action-guide > strong {
+  display: block;
+  font-size: 0.95rem;
+}
+.payer-action-guide p {
+  margin: 0.5rem 0;
+}
+.payer-action-guide ol {
+  margin: 0.75rem 0 0;
+  padding-left: 1.25rem;
+  list-style: decimal;
+}
+.payer-action-guide li + li {
+  margin-top: 0.6rem;
+}

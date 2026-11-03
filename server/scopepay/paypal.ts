@@ -40,13 +40,25 @@ async function paypalFetch(
         payload.name === "RESOURCE_NOT_FOUND")
     )
       throw new Error("PAYPAL_ORDER_NOT_FOUND");
+    if (
+      response.status === 422 &&
+      Array.isArray(payload.details) &&
+      payload.details.some(
+        detail =>
+          typeof detail === "object" &&
+          detail !== null &&
+          (detail as Record<string, unknown>).issue === "PAYER_ACTION_REQUIRED"
+      )
+    )
+      throw new Error("PAYPAL_PAYER_ACTION_REQUIRED");
     if (!response.ok) throw new Error("PAYPAL_PROVIDER_REJECTED");
     return payload;
   } catch (error) {
     if (
       error instanceof Error &&
       (error.message === "PAYPAL_PROVIDER_REJECTED" ||
-        error.message === "PAYPAL_ORDER_NOT_FOUND")
+        error.message === "PAYPAL_ORDER_NOT_FOUND" ||
+        error.message === "PAYPAL_PAYER_ACTION_REQUIRED")
     )
       throw error;
     throw new Error("PAYPAL_UNAVAILABLE");
@@ -159,14 +171,39 @@ export function extractApprovalUrl(
     try {
       const url = new URL(href);
       if (
-        url.protocol === "https:" &&
-        url.hostname === "www.sandbox.paypal.com" &&
+        url.origin === "https://www.sandbox.paypal.com" &&
         !url.username &&
-        !url.password
+        !url.password &&
+        !url.hash
       )
         return url.toString();
     } catch {
       /* Ignore malformed or non-allowlisted provider links. */
+    }
+  }
+  return null;
+}
+
+/** Only accept PayPal's explicit payer-action relation for an existing order. */
+export function extractPayerActionUrl(
+  payload: Record<string, unknown>
+): string | null {
+  const links = Array.isArray(payload.links)
+    ? (payload.links as Array<Record<string, unknown>>)
+    : [];
+  for (const link of links) {
+    if (link.rel !== "payer-action" || typeof link.href !== "string") continue;
+    try {
+      const url = new URL(link.href);
+      if (
+        url.origin === "https://www.sandbox.paypal.com" &&
+        !url.username &&
+        !url.password &&
+        !url.hash
+      )
+        return url.toString();
+    } catch {
+      /* Ignore malformed or non-Sandbox provider links. */
     }
   }
   return null;
@@ -240,6 +277,7 @@ export function paypalOrderMatches(
 export type PaypalPaymentStatus =
   | "COMPLETED"
   | "PENDING"
+  | "PAYER_ACTION_REQUIRED"
   | "APPROVED"
   | "CREATED"
   | "VOIDED"
@@ -294,6 +332,7 @@ export function paypalPaymentStatus(
   )
     return "FAILED";
   const status = normalizedStatus(payload.status);
+  if (status === "PAYER_ACTION_REQUIRED") return "PAYER_ACTION_REQUIRED";
   if (status === "APPROVED") return "APPROVED";
   if (status === "CREATED") return "CREATED";
   return "UNKNOWN";
@@ -362,8 +401,68 @@ export function recoveryStatus(
 ): "completed" | "pending" | "retryable" | "unknown" {
   const status = paypalPaymentStatus(payload);
   if (status === "COMPLETED") return "completed";
-  if (status === "PENDING") return "pending";
+  if (status === "PENDING" || status === "PAYER_ACTION_REQUIRED")
+    return "pending";
   if (status === "VOIDED" || status === "DENIED" || status === "FAILED")
     return "retryable";
   return "unknown";
+}
+
+export async function verifyPaypalWebhookSignature(args: {
+  authAlgo: string;
+  certUrl: string;
+  transmissionId: string;
+  transmissionSig: string;
+  transmissionTime: string;
+  webhookId: string;
+  eventJson: string;
+}): Promise<boolean> {
+  let cert: URL;
+  try {
+    cert = new URL(args.certUrl);
+  } catch {
+    throw new Error("PAYPAL_INVALID_WEBHOOK_CERT");
+  }
+  if (
+    ![
+      "https://api-m.sandbox.paypal.com",
+      "https://api.sandbox.paypal.com",
+    ].includes(cert.origin) ||
+    cert.username ||
+    cert.password ||
+    cert.hash ||
+    args.certUrl.length > 2048 ||
+    !args.webhookId ||
+    args.webhookId.trim() !== args.webhookId ||
+    args.webhookId.length > 256
+  )
+    throw new Error("PAYPAL_INVALID_WEBHOOK_CERT");
+
+  if (!args.eventJson || Buffer.byteLength(args.eventJson) > 128 * 1024)
+    throw new Error("PAYPAL_INVALID_WEBHOOK_EVENT");
+  const parsed: unknown = JSON.parse(args.eventJson);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error("PAYPAL_INVALID_WEBHOOK_EVENT");
+  const token = await accessToken();
+  const result = await paypalFetch(
+    "/v1/notifications/verify-webhook-signature",
+    {
+      method: "POST",
+      headers: authHeaders(token),
+      // Preserve the received JSON exactly: reserialization can invalidate a signature.
+      body:
+        JSON.stringify({
+          auth_algo: args.authAlgo,
+          cert_url: args.certUrl,
+          transmission_id: args.transmissionId,
+          transmission_sig: args.transmissionSig,
+          transmission_time: args.transmissionTime,
+          webhook_id: args.webhookId,
+        }).slice(0, -1) +
+        ',"webhook_event":' +
+        args.eventJson +
+        "}",
+    }
+  );
+  return result.verification_status === "SUCCESS";
 }

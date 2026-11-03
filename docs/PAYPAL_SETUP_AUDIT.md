@@ -35,3 +35,9 @@
 - [PayPal JavaScript SDK reference](https://developer.paypal.com/sdk/js/reference)
 - [Orders API integration](https://developer.paypal.com/api/rest/integration/orders-api)
 - [Webhooks overview](https://developer.paypal.com/api/rest/webhooks)
+
+## November 3 source update: buyer action and optional signed notifications
+
+The October statements above are historical evidence, not current confirmation that a review link or provider order remains available. The November 3 read-only diagnosis concerned a separate Northline mock order at exactly USD 12.50; it matched its accepted terms but required another buyer action. The original accepted Northline Coffee version 2 USD 12.50 record must remain unchanged. No completed capture is claimed.
+
+The source now handles `PAYER_ACTION_REQUIRED` as pending, returns only an explicit safe `payer-action` link for that state, and displays the same-order buyer checklist while capture/replacement remains blocked. It also implements an optional signed completed-capture webhook listener with bounded parsing, original JSON postback verification, independent Orders GET validation, and locked/idempotent ledger updates. This replaces the earlier statement that no listener exists in source; it does not mean the listener has been registered or deployed. See [the current setup and evidence boundaries](PAYER_ACTION_AND_WEBHOOKS.md).

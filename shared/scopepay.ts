@@ -88,6 +88,7 @@ export interface Workspace {
 export interface ServiceStatus {
   aiConfigured: boolean;
   paypalConfigured: boolean;
+  paypalWebhookConfigured?: boolean;
   databaseConfigured: boolean;
   paypalClientId: string | null;
   aiModel: string;
@@ -115,6 +116,11 @@ export interface ClientReview {
   document: ScopeDocument;
   sandbox: true;
   merchantNotice: string;
+  /** Ephemeral provider-verified next step; never evidence of a payment. */
+  paymentAction?: {
+    kind: "payer_action_required";
+    approvalUrl: string | null;
+  };
 }
 export interface PaymentResult {
   status: "paid";
