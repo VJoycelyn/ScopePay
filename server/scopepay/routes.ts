@@ -2505,6 +2505,29 @@ router.post("/client/:token/orders/:orderId/capture", async (req, res) => {
           pending.paypalOrderId,
           captureClaimed
         );
+        if (captureClaimed && paypalPaymentStatus(reconciled) === "APPROVED") {
+          if (message === "PAYPAL_PAYER_ACTION_REQUIRED")
+            return sendPayerActionRequired(
+              res,
+              extractPayerActionUrl(reconciled)
+            );
+          const knownRejections = new Set([
+            "PAYPAL_INSTRUMENT_DECLINED",
+            "PAYPAL_PAYER_CANNOT_PAY",
+            "PAYPAL_PAYEE_ACCOUNT_RESTRICTED",
+            "PAYPAL_TRANSACTION_REFUSED",
+          ]);
+          if (
+            message === "PAYPAL_PROVIDER_REJECTED" ||
+            knownRejections.has(message)
+          )
+            return sendError(
+              res,
+              409,
+              "PayPal rejected the capture request. The same saved order is still approved but no completed capture was verified. Check Sandbox Activity and the buyer/merchant setup before retrying; do not create a replacement.",
+              knownRejections.has(message) ? message : "PAYPAL_CAPTURE_REJECTED"
+            );
+        }
         return sendError(
           res,
           503,

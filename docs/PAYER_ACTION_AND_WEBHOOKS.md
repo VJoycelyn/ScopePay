@@ -39,3 +39,24 @@ The full app needs an HTTPS server for secrets, AI, durable database access, cap
 [1]: https://developer.paypal.com/api/orders/v2/error-messages "PayPal Orders v2 error messages"
 [2]: https://developer.paypal.com/checkout/integrate "PayPal Standard checkout integration"
 [3]: https://developer.paypal.com/api/rest/webhooks/rest "PayPal webhook integration and verification"
+
+## If the same order is approved but capture is rejected
+
+Approval is not payment. A later November 3 read-only recheck of the screenshot's separate version-1 USD 12.50 mock found APPROVED with exact matching terms but no completed capture. This is newer than the action-required observation above. No buyer login, approval, capture or record mutation was performed by that check. The original Northline version-2 USD 12.50 record is separate and unchanged.
+
+After the repaired backend is actually published, refresh the same private review page and use Verify payment. If the server has verified a matching completed capture, it records the receipt; do not pay again. If PayPal still reports only approval, a capture must still complete through the existing buyer-approved flow. A user may explicitly use Retry capture for this same order, but should not repeatedly retry a declined funding method or restricted account. A rejected capture is reconciled before any guidance is returned, and does not create a replacement.
+
+| Safe code                                                 | What to check                                                                                                                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PAYPAL_INSTRUMENT_DECLINED`                              | PayPal rejected the buyer's funding instrument. Review eligible Sandbox Personal buyer funding options in PayPal before another explicit attempt.             |
+| `PAYPAL_PAYER_CANNOT_PAY`                                 | The buyer/merchant settings combination prevents this payment. Review the Sandbox Personal buyer and Business merchant settings in Developer Dashboard.       |
+| `PAYPAL_PAYEE_ACCOUNT_RESTRICTED`                         | The Sandbox Business merchant is restricted. The owner must resolve that restriction; application code cannot override it.                                    |
+| `PAYPAL_TRANSACTION_REFUSED` or `PAYPAL_CAPTURE_REJECTED` | PayPal rejected capture without a more specific safely recognized reason. Check Sandbox Activity and buyer/merchant setup; no completed capture was verified. |
+
+A timeout, unrecognized detail, failed GET or mismatch is never presented as proof of a funding decline or successful payment. Raw provider messages, account details and debug identifiers are not shown. The old generic error alone cannot identify which account/funding issue caused that earlier rejection. No automatic SDK restart, new order or capture is part of this guide.
+
+Official references: [PayPal Orders error messages](https://developer.paypal.com/api/orders/v2/error-messages) and [capture endpoint reference](https://docs.paypal.ai/reference/api/rest/orders/capture-payment-for-order).
+
+## GitHub Pages navigation
+
+The public [GitHub Pages landing page](https://vjoycelyn.github.io/ScopePay/) links to the [live ScopePay app](https://scopepay.manus.space/) and [public source](https://github.com/VJoycelyn/ScopePay). GitHub Pages serves the static landing page only; AI, durable project records, server-side capture, secrets and webhook verification run in the server-backed app. A successful Pages update is not a backend deployment or payment confirmation.

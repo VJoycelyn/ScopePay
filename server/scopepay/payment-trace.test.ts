@@ -15,6 +15,22 @@ const uuidPattern =
 afterEach(() => vi.restoreAllMocks());
 
 describe("privacy-safe PayPal capture tracing", () => {
+  it.each([
+    "PAYPAL_INSTRUMENT_DECLINED",
+    "PAYPAL_PAYER_CANNOT_PAY",
+    "PAYPAL_PAYEE_ACCOUNT_RESTRICTED",
+    "PAYPAL_TRANSACTION_REFUSED",
+    "PAYPAL_CAPTURE_REJECTED",
+  ])("retains only the intended safe capture rejection %s", code => {
+    expect(safePaymentErrorCode(new Error(code))).toBe(code);
+    expect(safePaymentTraceDetails({ errorCode: code })).toEqual({
+      errorCode: code,
+    });
+    expect(
+      safePaymentErrorCode(new Error(`${code}:private-account-details`))
+    ).toBe("UNKNOWN_ERROR");
+  });
+
   it("accepts a valid correlation UUID and replaces unsafe header content", () => {
     expect(validPaymentTraceId(UUID.toUpperCase())).toBe(UUID);
     for (const raw of [

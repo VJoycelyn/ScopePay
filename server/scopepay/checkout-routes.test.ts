@@ -777,6 +777,134 @@ describe("ScopePay accepted-version checkout routes", () => {
     expect(mocks.state.createCalls).toHaveLength(0);
   });
 
+  it.each([
+    ["PAYPAL_PROVIDER_REJECTED", "PAYPAL_CAPTURE_REJECTED"],
+    ["PAYPAL_INSTRUMENT_DECLINED", "PAYPAL_INSTRUMENT_DECLINED"],
+    ["PAYPAL_PAYER_CANNOT_PAY", "PAYPAL_PAYER_CANNOT_PAY"],
+    ["PAYPAL_PAYEE_ACCOUNT_RESTRICTED", "PAYPAL_PAYEE_ACCOUNT_RESTRICTED"],
+    ["PAYPAL_TRANSACTION_REFUSED", "PAYPAL_TRANSACTION_REFUSED"],
+    ["PAYPAL_UNAVAILABLE", "PAYMENT_UNKNOWN"],
+  ])(
+    "preserves approved-but-uncaptured state after %s without creating or hiding uncertainty",
+    async (providerError, expectedCode) => {
+      mocks.reset();
+      const order = mocks.seedOrder({
+        paypal_order_id: "approved-rejected-order",
+      });
+      mocks.state.providers.set(
+        order.paypal_order_id,
+        mocks.providerPayload(order.paypal_order_id, "APPROVED")
+      );
+      mocks.paypal.capturePaypalOrder.mockRejectedValueOnce(
+        new Error(providerError)
+      );
+      const result = await post(
+        `/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}/capture`,
+        {}
+      );
+      expect(result.body.code).toBe(expectedCode);
+      expect(result.status).toBe(
+        expectedCode === "PAYMENT_UNKNOWN" ? 503 : 409
+      );
+      expect(order.status).toBe("pending");
+      expect(order.capture_id).toBeNull();
+      expect(documentFromState().status).toBe("payment_pending");
+      expect(mocks.paypal.capturePaypalOrder).toHaveBeenCalledTimes(1);
+      expect(mocks.paypal.getPaypalOrder).toHaveBeenCalledTimes(2);
+      expect(mocks.state.createCalls).toHaveLength(0);
+    }
+  );
+
+  it("does not substitute a normal approve link when capture demands buyer action but GET is still APPROVED", async () => {
+    mocks.reset();
+    const order = mocks.seedOrder({ paypal_order_id: "approved-action-lag" });
+    mocks.state.providers.set(
+      order.paypal_order_id,
+      mocks.providerPayload(order.paypal_order_id, "APPROVED")
+    );
+    mocks.paypal.capturePaypalOrder.mockRejectedValueOnce(
+      new Error("PAYPAL_PAYER_ACTION_REQUIRED")
+    );
+    const result = await post(
+      `/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}/capture`,
+      {}
+    );
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe("PAYER_ACTION_REQUIRED");
+    expect(result.body.approvalUrl).toBeNull();
+    expect(order.status).toBe("pending");
+    expect(mocks.state.createCalls).toHaveLength(0);
+  });
+
+  it("records only an independently matched completed capture even if the capture request returned a rejection", async () => {
+    mocks.reset();
+    const order = mocks.seedOrder({
+      paypal_order_id: "rejected-then-verified",
+    });
+    mocks.paypal.getPaypalOrder
+      .mockResolvedValueOnce(
+        mocks.providerPayload(order.paypal_order_id, "APPROVED")
+      )
+      .mockResolvedValueOnce(
+        mocks.providerPayload(
+          order.paypal_order_id,
+          "COMPLETED",
+          order.document_id,
+          order.document_version,
+          order.amount_cents,
+          "COMPLETED",
+          "verified-after-rejection"
+        )
+      );
+    mocks.paypal.capturePaypalOrder.mockRejectedValueOnce(
+      new Error("PAYPAL_INSTRUMENT_DECLINED")
+    );
+    const result = await post(
+      `/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}/capture`,
+      {}
+    );
+    expect(result.status).toBe(200);
+    expect(result.body.captureId).toBe("verified-after-rejection");
+    expect(order.status).toBe("captured");
+    expect(documentFromState().status).toBe("paid");
+    expect(mocks.state.createCalls).toHaveLength(0);
+  });
+
+  it.each(["mismatch", "unavailable"])(
+    "does not claim a known decline after %s reconciliation",
+    async mode => {
+      mocks.reset();
+      const order = mocks.seedOrder({
+        paypal_order_id: "rejected-reconcile-failed",
+      });
+      mocks.paypal.getPaypalOrder.mockResolvedValueOnce(
+        mocks.providerPayload(order.paypal_order_id, "APPROVED")
+      );
+      if (mode === "mismatch")
+        mocks.paypal.getPaypalOrder.mockResolvedValueOnce(
+          mocks.providerPayload("unrelated-provider-order", "APPROVED")
+        );
+      else
+        mocks.paypal.getPaypalOrder.mockRejectedValueOnce(
+          new Error("PAYPAL_UNAVAILABLE")
+        );
+      mocks.paypal.capturePaypalOrder.mockRejectedValueOnce(
+        new Error("PAYPAL_INSTRUMENT_DECLINED")
+      );
+      const result = await post(
+        `/api/scopepay/client/${CLIENT_TOKEN}/orders/${order.id}/capture`,
+        {}
+      );
+      expect(result.body.code).toBe(
+        mode === "mismatch" ? "PAYMENT_MISMATCH" : "PAYMENT_UNKNOWN"
+      );
+      expect(order.status).not.toBe("captured");
+      expect(order.capture_id).toBeNull();
+      expect(documentFromState().status).not.toBe("paid");
+      expect(mocks.state.createCalls).toHaveLength(0);
+    }
+  );
+
   it("reuses an existing pending local order and validated payer-action link without creating", async () => {
     mocks.reset();
     const order = mocks.seedOrder({

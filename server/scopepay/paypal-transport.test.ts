@@ -87,6 +87,19 @@ describe("PayPal saved-order error classification", () => {
     return fetchMock;
   }
 
+  function mockCapture(status: number, payload: Record<string, unknown>) {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "fictional-token" }), {
+          status: 200,
+        })
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(payload), { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
   it.each(["RESOURCE_NOT_FOUND", "INVALID_RESOURCE_ID"])(
     "recognizes PayPal 404 %s as missing, without creating or capturing",
     async name => {
@@ -167,6 +180,85 @@ describe("PayPal saved-order error classification", () => {
     );
     expect(recoveryStatus({ status: "PAYER_ACTION_REQUIRED" })).toBe("pending");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    "INSTRUMENT_DECLINED",
+    "PAYER_CANNOT_PAY",
+    "PAYEE_ACCOUNT_RESTRICTED",
+    "TRANSACTION_REFUSED",
+  ])(
+    "classifies capture 422 issue %s without exposing provider details",
+    async issue => {
+      const fetchMock = mockCapture(422, {
+        name: "UNPROCESSABLE_ENTITY",
+        debug_id: "private-debug-id",
+        details: [
+          {
+            issue,
+            description: "private provider detail",
+            field: "/purchase_units/0/payment_source",
+          },
+        ],
+      });
+
+      await expect(capturePaypalOrder("FICTIONAL-SAVED-ORDER")).rejects.toThrow(
+        new RegExp(`^PAYPAL_${issue}$`)
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("keeps arbitrary capture issues generic without leaking raw body details", async () => {
+    mockCapture(422, {
+      name: "UNPROCESSABLE_ENTITY",
+      debug_id: "private-debug-id",
+      details: [
+        {
+          issue: "PRIVATE_UNKNOWN_ISSUE",
+          description: "private provider detail and order identifier",
+        },
+      ],
+    });
+
+    await expect(capturePaypalOrder("FICTIONAL-SAVED-ORDER")).rejects.toThrow(
+      /^PAYPAL_PROVIDER_REJECTED$/
+    );
+  });
+
+  it("keeps known capture issues generic for an unexpected HTTP status", async () => {
+    mockCapture(500, {
+      name: "INTERNAL_ERROR",
+      debug_id: "private-debug-id",
+      details: [{ issue: "INSTRUMENT_DECLINED" }],
+    });
+
+    await expect(capturePaypalOrder("FICTIONAL-SAVED-ORDER")).rejects.toThrow(
+      /^PAYPAL_PROVIDER_REJECTED$/
+    );
+  });
+
+  it("keeps known capture issues generic on the GET order endpoint", async () => {
+    const fetchMock = mockLookup(422, "INSTRUMENT_DECLINED");
+    fetchMock.mockReset();
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "fictional-token" }), {
+          status: 200,
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            details: [{ issue: "INSTRUMENT_DECLINED" }],
+          }),
+          { status: 422 }
+        )
+      );
+
+    await expect(getPaypalOrder("FICTIONAL-SAVED-ORDER")).rejects.toThrow(
+      /^PAYPAL_PROVIDER_REJECTED$/
+    );
   });
 
   it("keeps an unrecognized provider status unknown rather than retryable or paid", () => {

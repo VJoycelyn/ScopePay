@@ -60,6 +60,16 @@ const SAFE_SCOPEPAY_ERROR_MESSAGES: Record<string, string> = {
     "ScopePay could not complete verification. Wait briefly and verify the saved order again; do not create a replacement.",
   PAYPAL_PROVIDER_REJECTED:
     "PayPal Sandbox rejected this payment request. No payment was recorded.",
+  PAYPAL_INSTRUMENT_DECLINED:
+    "PayPal Sandbox declined the buyer's funding method. Check eligible funding options in the Sandbox Personal buyer account, then verify this same order before explicitly retrying capture. Do not create a replacement.",
+  PAYPAL_PAYER_CANNOT_PAY:
+    "PayPal Sandbox says this buyer cannot pay this merchant. Check the Sandbox Personal buyer and Business merchant settings in Developer Dashboard. Check Sandbox Activity and verify this same order before retrying; no completed capture is confirmed.",
+  PAYPAL_PAYEE_ACCOUNT_RESTRICTED:
+    "PayPal Sandbox reports that the merchant account is restricted. The owner must resolve the Sandbox Business account restriction before retrying. Check Sandbox Activity and verify this same order; do not create a replacement.",
+  PAYPAL_TRANSACTION_REFUSED:
+    "PayPal Sandbox refused the capture request. The same saved order is still approved, but no completed capture was verified. Check Sandbox Activity and the buyer/merchant setup before retrying; do not create a replacement.",
+  PAYPAL_CAPTURE_REJECTED:
+    "PayPal Sandbox rejected the capture request. The same saved order is still approved, but no completed capture was verified. Check Sandbox Activity and the buyer/merchant setup before retrying; do not create a replacement.",
   VERSION_MISMATCH:
     "This payment link is for a different document version. No payment was recorded.",
 };

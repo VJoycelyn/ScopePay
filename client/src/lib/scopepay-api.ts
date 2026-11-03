@@ -83,6 +83,11 @@ const SAFE_BACKEND_CODES = new Set([
   "PAYPAL_NOT_CONFIGURED",
   "PAYPAL_ORDER_NOT_FOUND",
   "PAYPAL_PROVIDER_REJECTED",
+  "PAYPAL_INSTRUMENT_DECLINED",
+  "PAYPAL_PAYER_CANNOT_PAY",
+  "PAYPAL_PAYEE_ACCOUNT_RESTRICTED",
+  "PAYPAL_TRANSACTION_REFUSED",
+  "PAYPAL_CAPTURE_REJECTED",
   "PAYPAL_UNAVAILABLE",
   "PROJECT_NOT_FOUND",
   "RATE_LIMITED",
@@ -119,6 +124,16 @@ const SAFE_ERROR_MESSAGES: Record<string, string> = {
   PAYPAL_NOT_CONFIGURED: "PayPal checkout is not configured.",
   PAYPAL_ORDER_NOT_FOUND: "The PayPal order could not be found.",
   PAYPAL_PROVIDER_REJECTED: "PayPal could not complete the payment request.",
+  PAYPAL_INSTRUMENT_DECLINED:
+    "PayPal Sandbox declined the buyer's funding method. Check eligible funding options in the Sandbox Personal buyer account, then verify this same order before explicitly retrying capture. Do not create a replacement.",
+  PAYPAL_PAYER_CANNOT_PAY:
+    "PayPal Sandbox says this buyer cannot pay this merchant. Check the Sandbox Personal buyer and Business merchant settings in Developer Dashboard. Check Sandbox Activity and verify this same order before retrying; no completed capture is confirmed.",
+  PAYPAL_PAYEE_ACCOUNT_RESTRICTED:
+    "PayPal Sandbox reports that the merchant account is restricted. The owner must resolve the Sandbox Business account restriction before retrying. Check Sandbox Activity and verify this same order; do not create a replacement.",
+  PAYPAL_TRANSACTION_REFUSED:
+    "PayPal Sandbox refused the capture request. The same saved order is still approved, but no completed capture was verified. Check Sandbox Activity and the buyer/merchant setup before retrying; do not create a replacement.",
+  PAYPAL_CAPTURE_REJECTED:
+    "PayPal Sandbox rejected the capture request. The same saved order is still approved, but no completed capture was verified. Check Sandbox Activity and the buyer/merchant setup before retrying; do not create a replacement.",
   SERVICE_UNAVAILABLE:
     "ScopePay's payment service is temporarily unavailable. Verify the saved order before retrying.",
   PAYPAL_UNAVAILABLE: "PayPal is temporarily unavailable.",

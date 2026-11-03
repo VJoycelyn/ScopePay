@@ -41,6 +41,36 @@ afterEach(() => {
 });
 
 describe("ScopePay client payment API response safety", () => {
+  it.each([
+    ["PAYPAL_INSTRUMENT_DECLINED", "funding method"],
+    ["PAYPAL_PAYER_CANNOT_PAY", "buyer cannot pay this merchant"],
+    ["PAYPAL_PAYEE_ACCOUNT_RESTRICTED", "merchant account is restricted"],
+    ["PAYPAL_TRANSACTION_REFUSED", "refused the capture request"],
+    ["PAYPAL_CAPTURE_REJECTED", "rejected the capture request"],
+  ])(
+    "keeps %s actionable without exposing provider payloads",
+    async (code, expectedCopy) => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            jsonResponse(
+              { code, error: "private provider body and account data" },
+              409
+            )
+          )
+      );
+      const error = await rejected(
+        scopepayApi.captureOrder(CLIENT_TOKEN, LOCAL_ORDER_ID)
+      );
+      expect(error.code).toBe(code);
+      expect(error.message).toContain(expectedCopy);
+      expect(error.message).toMatch(/same (saved )?order/);
+      expect(error.message).not.toContain("private provider");
+    }
+  );
+
   it("accepts a valid create-order response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(

@@ -1,6 +1,19 @@
 import crypto from "node:crypto";
 
 const PAYPAL_BASE = "https://api-m.sandbox.paypal.com";
+const PAYPAL_CAPTURE_ISSUES = new Set([
+  "INSTRUMENT_DECLINED",
+  "PAYER_CANNOT_PAY",
+  "PAYEE_ACCOUNT_RESTRICTED",
+  "TRANSACTION_REFUSED",
+]);
+
+function isCaptureEndpoint(path: string, init: RequestInit): boolean {
+  return (
+    init.method === "POST" &&
+    /^\/v2\/checkout\/orders\/[^/]+\/capture$/.test(path)
+  );
+}
 
 export function paypalConfigured(): boolean {
   return Boolean(
@@ -51,6 +64,19 @@ async function paypalFetch(
       )
     )
       throw new Error("PAYPAL_PAYER_ACTION_REQUIRED");
+    if (
+      response.status === 422 &&
+      isCaptureEndpoint(path, init) &&
+      Array.isArray(payload.details)
+    ) {
+      const issue = payload.details
+        .filter(detail => typeof detail === "object" && detail !== null)
+        .map(detail => (detail as Record<string, unknown>).issue)
+        .find(
+          value => typeof value === "string" && PAYPAL_CAPTURE_ISSUES.has(value)
+        );
+      if (typeof issue === "string") throw new Error(`PAYPAL_${issue}`);
+    }
     if (!response.ok) throw new Error("PAYPAL_PROVIDER_REJECTED");
     return payload;
   } catch (error) {
@@ -58,7 +84,9 @@ async function paypalFetch(
       error instanceof Error &&
       (error.message === "PAYPAL_PROVIDER_REJECTED" ||
         error.message === "PAYPAL_ORDER_NOT_FOUND" ||
-        error.message === "PAYPAL_PAYER_ACTION_REQUIRED")
+        error.message === "PAYPAL_PAYER_ACTION_REQUIRED" ||
+        (error.message.startsWith("PAYPAL_") &&
+          PAYPAL_CAPTURE_ISSUES.has(error.message.slice("PAYPAL_".length))))
     )
       throw error;
     throw new Error("PAYPAL_UNAVAILABLE");
